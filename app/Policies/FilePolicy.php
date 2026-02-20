@@ -108,6 +108,12 @@ class FilePolicy
 
     public function delete(User $user, File $file): bool
     {
+        if ($this->hasDirectFilePermission($user, $file, 'can_delete')
+            || $this->hasFolderPermission($user, $file, 'can_delete')
+        ) {
+            return true;
+        }
+
         if (! $user->can('files.delete')) {
             return false;
         }

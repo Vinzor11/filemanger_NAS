@@ -114,6 +114,10 @@ class FolderPolicy
 
     public function delete(User $user, Folder $folder): bool
     {
+        if ($this->hasFolderPermission($user, $folder, 'can_delete')) {
+            return true;
+        }
+
         if (! $user->can('folders.delete')) {
             return false;
         }

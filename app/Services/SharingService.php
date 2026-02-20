@@ -33,7 +33,9 @@ class SharingService
 
             foreach ($shares as $share) {
                 $canView = (bool) ($share['can_view'] ?? true);
+                $canDownload = (bool) ($share['can_download'] ?? false);
                 $canEdit = (bool) ($share['can_edit'] ?? false);
+                $canDelete = (bool) ($share['can_delete'] ?? false);
 
                 FilePermission::query()->updateOrCreate(
                     [
@@ -42,9 +44,9 @@ class SharingService
                     ],
                     [
                         'can_view' => $canView,
-                        'can_download' => false,
+                        'can_download' => $canDownload,
                         'can_edit' => $canEdit,
-                        'can_delete' => false,
+                        'can_delete' => $canDelete,
                         'created_by' => $actor->id,
                     ],
                 );
@@ -76,6 +78,10 @@ class SharingService
             foreach ($shares as $share) {
                 $canView = (bool) ($share['can_view'] ?? true);
                 $canEdit = (bool) ($share['can_edit'] ?? false);
+                $canUpload = array_key_exists('can_upload', $share)
+                    ? (bool) $share['can_upload']
+                    : $canEdit;
+                $canDelete = (bool) ($share['can_delete'] ?? false);
 
                 FolderPermission::query()->updateOrCreate(
                     [
@@ -84,9 +90,9 @@ class SharingService
                     ],
                     [
                         'can_view' => $canView,
-                        'can_upload' => $canEdit,
+                        'can_upload' => $canUpload,
                         'can_edit' => $canEdit,
-                        'can_delete' => false,
+                        'can_delete' => $canDelete,
                         'created_by' => $actor->id,
                     ],
                 );
@@ -366,9 +372,9 @@ class SharingService
 
             $permission->update([
                 'can_view' => array_key_exists('can_view', $input) ? (bool) $input['can_view'] : $permission->can_view,
-                'can_download' => false,
+                'can_download' => array_key_exists('can_download', $input) ? (bool) $input['can_download'] : $permission->can_download,
                 'can_edit' => array_key_exists('can_edit', $input) ? (bool) $input['can_edit'] : $permission->can_edit,
-                'can_delete' => false,
+                'can_delete' => array_key_exists('can_delete', $input) ? (bool) $input['can_delete'] : $permission->can_delete,
             ]);
 
             $this->auditLogService->log(
@@ -591,9 +597,9 @@ class SharingService
     {
         return [
             'can_view' => (bool) ($permissions['can_view'] ?? true),
-            'can_download' => false,
+            'can_download' => (bool) ($permissions['can_download'] ?? false),
             'can_edit' => (bool) ($permissions['can_edit'] ?? false),
-            'can_delete' => false,
+            'can_delete' => (bool) ($permissions['can_delete'] ?? false),
         ];
     }
 
@@ -609,12 +615,15 @@ class SharingService
     private function normalizeFolderDepartmentPermissions(array $permissions): array
     {
         $canEdit = (bool) ($permissions['can_edit'] ?? false);
+        $canUpload = array_key_exists('can_upload', $permissions)
+            ? (bool) $permissions['can_upload']
+            : $canEdit;
 
         return [
             'can_view' => (bool) ($permissions['can_view'] ?? true),
-            'can_upload' => $canEdit,
+            'can_upload' => $canUpload,
             'can_edit' => $canEdit,
-            'can_delete' => false,
+            'can_delete' => (bool) ($permissions['can_delete'] ?? false),
         ];
     }
 }

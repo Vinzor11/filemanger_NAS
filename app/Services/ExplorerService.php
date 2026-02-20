@@ -153,19 +153,21 @@ class ExplorerService
                 $isDepartmentVisible = $departmentId !== null
                     && $folder->department_id === $departmentId
                     && $folder->visibility === 'department';
+                $hasDirectPermission = $directPermission !== null;
 
                 $folder->setAttribute('access', [
-                    'can_view' => (bool) ($directPermission?->can_view ?? $isDepartmentVisible),
-                    'can_upload' => $isDepartmentVisible
-                        ? $user->can('files.upload')
-                        : (bool) (
-                            ($directPermission?->can_upload ?? false) ||
-                            ($directPermission?->can_edit ?? false)
-                        ),
-                    'can_edit' => $isDepartmentVisible
-                        ? $user->can('folders.update')
-                        : (bool) ($directPermission?->can_edit ?? false),
-                    'can_delete' => $isDepartmentVisible && $user->can('folders.delete'),
+                    'can_view' => $hasDirectPermission
+                        ? (bool) $directPermission->can_view
+                        : $isDepartmentVisible,
+                    'can_upload' => $hasDirectPermission
+                        ? (bool) ($directPermission->can_upload || $directPermission->can_edit)
+                        : ($isDepartmentVisible ? $user->can('files.upload') : false),
+                    'can_edit' => $hasDirectPermission
+                        ? (bool) $directPermission->can_edit
+                        : ($isDepartmentVisible ? $user->can('folders.update') : false),
+                    'can_delete' => $hasDirectPermission
+                        ? (bool) $directPermission->can_delete
+                        : ($isDepartmentVisible && $user->can('folders.delete')),
                 ]);
 
                 return $folder;
@@ -215,14 +217,21 @@ class ExplorerService
                     $isDepartmentVisible = $departmentId !== null
                         && $file->department_id === $departmentId
                         && $file->visibility === 'department';
+                    $hasDirectPermission = $directPermission !== null;
 
                     $file->setAttribute('access', [
-                        'can_view' => (bool) ($directPermission?->can_view ?? $isDepartmentVisible),
-                        'can_download' => $isDepartmentVisible ? $user->can('files.download') : false,
-                        'can_edit' => $isDepartmentVisible
-                            ? $user->can('files.update')
-                            : (bool) ($directPermission?->can_edit ?? false),
-                        'can_delete' => $isDepartmentVisible && $user->can('files.delete'),
+                        'can_view' => $hasDirectPermission
+                            ? (bool) $directPermission->can_view
+                            : $isDepartmentVisible,
+                        'can_download' => $hasDirectPermission
+                            ? (bool) $directPermission->can_download
+                            : ($isDepartmentVisible ? $user->can('files.download') : false),
+                        'can_edit' => $hasDirectPermission
+                            ? (bool) $directPermission->can_edit
+                            : ($isDepartmentVisible ? $user->can('files.update') : false),
+                        'can_delete' => $hasDirectPermission
+                            ? (bool) $directPermission->can_delete
+                            : ($isDepartmentVisible && $user->can('files.delete')),
                     ]);
 
                     return $file;
@@ -287,7 +296,7 @@ class ExplorerService
                         'can_view' => (bool) ($directPermission?->can_view ?? false),
                         'can_upload' => (bool) ($directPermission?->can_upload ?? false),
                         'can_edit' => (bool) ($directPermission?->can_edit ?? false),
-                        'can_delete' => false,
+                        'can_delete' => (bool) ($directPermission?->can_delete ?? false),
                     ]);
 
                     return $folder;
@@ -324,9 +333,9 @@ class ExplorerService
 
                 $file->setAttribute('access', [
                     'can_view' => (bool) ($directPermission?->can_view ?? false),
-                    'can_download' => false,
+                    'can_download' => (bool) ($directPermission?->can_download ?? false),
                     'can_edit' => (bool) ($directPermission?->can_edit ?? false),
-                    'can_delete' => false,
+                    'can_delete' => (bool) ($directPermission?->can_delete ?? false),
                 ]);
 
                 return $file;
@@ -340,8 +349,18 @@ class ExplorerService
      * @param  array<string, mixed>  $filters
      * @return array{children:\Illuminate\Support\Collection<int, Folder>, files:LengthAwarePaginator}
      */
-    public function folderContents(User $user, Folder $folder, array $filters): array
+    public function folderContents(
+        User|Folder $userOrFolder,
+        Folder|array $folderOrFilters,
+        ?array $filters = null,
+    ): array
     {
+        [$user, $folder, $filters] = $this->resolveFolderContentsArguments(
+            $userOrFolder,
+            $folderOrFilters,
+            $filters,
+        );
+
         $folderAccess = $this->folderAccessForUser($user, $folder);
 
         $children = Folder::query()
@@ -378,7 +397,9 @@ class ExplorerService
                         (bool) $folderAccess['can_edit'],
                     'can_delete' =>
                         $isOwner ||
-                        ($isSameDepartment && $user->can('folders.delete')),
+                        ($isSameDepartment && $user->can('folders.delete')) ||
+                        (bool) ($directPermission?->can_delete ?? false) ||
+                        (bool) $folderAccess['can_delete'],
                 ]);
 
                 return $child;
@@ -423,7 +444,9 @@ class ExplorerService
                         (bool) $folderAccess['can_edit'],
                     'can_delete' =>
                         $isOwner ||
-                        ($isSameDepartment && $user->can('files.delete')),
+                        ($isSameDepartment && $user->can('files.delete')) ||
+                        (bool) ($directPermission?->can_delete ?? false) ||
+                        (bool) $folderAccess['can_delete'],
                 ]);
 
                 return $file;
@@ -431,6 +454,47 @@ class ExplorerService
         ));
 
         return compact('children', 'files');
+    }
+
+    /**
+     * @param  User|Folder  $userOrFolder
+     * @param  Folder|array<string, mixed>  $folderOrFilters
+     * @param  array<string, mixed>|null  $filters
+     * @return array{0:User,1:Folder,2:array<string, mixed>}
+     */
+    private function resolveFolderContentsArguments(
+        User|Folder $userOrFolder,
+        Folder|array $folderOrFilters,
+        ?array $filters,
+    ): array {
+        if ($userOrFolder instanceof User) {
+            if (! $folderOrFilters instanceof Folder) {
+                throw new \InvalidArgumentException(
+                    'Expected folder argument when first parameter is a user.',
+                );
+            }
+
+            return [$userOrFolder, $folderOrFilters, $filters ?? []];
+        }
+
+        if (! is_array($folderOrFilters)) {
+            throw new \InvalidArgumentException(
+                'Expected filters array when first parameter is a folder.',
+            );
+        }
+
+        $ownerId = $userOrFolder->owner_user_id;
+        if ($ownerId === null) {
+            throw new \InvalidArgumentException(
+                'Cannot infer user for folder contents when folder has no owner.',
+            );
+        }
+
+        return [
+            User::query()->findOrFail($ownerId),
+            $userOrFolder,
+            $folderOrFilters,
+        ];
     }
 
     /**
