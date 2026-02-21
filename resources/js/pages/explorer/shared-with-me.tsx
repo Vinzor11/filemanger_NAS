@@ -11,6 +11,8 @@ import {
     type FileRow,
     type FolderRow,
 } from '@/components/file-manager/file-table';
+import { LayoutModeToggle } from '@/components/file-manager/layout-mode-toggle';
+import { useFileLayoutMode } from '@/hooks/use-file-layout-mode';
 import { usePageLoading } from '@/hooks/use-page-loading';
 import AppLayout from '@/layouts/app-layout';
 import { promptReplaceFile } from '@/lib/file-replace-actions';
@@ -41,6 +43,9 @@ const breadcrumbs: BreadcrumbItem[] = [
 export default function SharedWithMe({ folders, files }: PageProps) {
     const page = usePage<AuthPageProps>();
     const isPageLoading = usePageLoading();
+    const [layoutMode, setLayoutMode] = useFileLayoutMode(
+        'explorer-layout-shared-with-me',
+    );
     const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
     const [previewFile, setPreviewFile] = useState<FileRow | null>(null);
     const [detailsTarget, setDetailsTarget] = useState<DetailsTarget | null>(
@@ -51,7 +56,13 @@ export default function SharedWithMe({ folders, files }: PageProps) {
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Shared With Me" />
             <div className="space-y-4 p-4 md:p-6">
-                <h1 className="text-xl font-semibold">Shared With Me</h1>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h1 className="text-xl font-semibold">Shared With Me</h1>
+                    <LayoutModeToggle
+                        value={layoutMode}
+                        onValueChange={setLayoutMode}
+                    />
+                </div>
 
                 <FileItemActionDialogs
                     folders={folders}
@@ -75,6 +86,7 @@ export default function SharedWithMe({ folders, files }: PageProps) {
                     files={files.data}
                     currentUser={page.props.auth.user}
                     loading={isPageLoading}
+                    layoutMode={layoutMode}
                     onBulkDownload={({ files: selectedFiles }) => {
                         downloadSelectionFiles({ files: selectedFiles });
                     }}

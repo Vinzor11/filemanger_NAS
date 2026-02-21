@@ -11,8 +11,10 @@ import {
     type FileRow,
     type FolderRow,
 } from '@/components/file-manager/file-table';
+import { LayoutModeToggle } from '@/components/file-manager/layout-mode-toggle';
 import { NewActionsMenu } from '@/components/file-manager/new-actions-menu';
 import { ShareModal } from '@/components/file-manager/share-modal';
+import { useFileLayoutMode } from '@/hooks/use-file-layout-mode';
 import { usePageLoading } from '@/hooks/use-page-loading';
 import AppLayout from '@/layouts/app-layout';
 import { promptReplaceFile } from '@/lib/file-replace-actions';
@@ -58,6 +60,13 @@ export default function FolderShow({
 }: PageProps) {
     const page = usePage<AuthPageProps>();
     const isPageLoading = usePageLoading();
+    const layoutStorageKey =
+        folder.visibility === 'department'
+            ? 'explorer-layout-department-files'
+            : folder.visibility === 'shared'
+              ? 'explorer-layout-shared-with-me'
+              : 'explorer-layout-my-files';
+    const [layoutMode, setLayoutMode] = useFileLayoutMode(layoutStorageKey);
     const [isUploadProcessing, setIsUploadProcessing] = useState(false);
     const [selectedForShare, setSelectedForShare] = useState<
         | { kind: 'file'; file: FileRow }
@@ -97,21 +106,29 @@ export default function FolderShow({
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <h1 className="text-xl font-semibold">{folder.name}</h1>
-                        {canShowNewActions ? (
-                            <NewActionsMenu
-                                folderPublicId={folder.public_id}
-                                parentFolderId={folder.public_id}
-                                defaultScope={
-                                    folder.visibility === 'department'
-                                        ? 'department'
-                                        : 'private'
-                                }
-                                showScope={false}
-                                canCreateFolder={canCreateFolderInFolder}
-                                canUpload={canUploadToFolder}
-                                onUploadProcessingChange={setIsUploadProcessing}
+                        <div className="flex items-center gap-2">
+                            <LayoutModeToggle
+                                value={layoutMode}
+                                onValueChange={setLayoutMode}
                             />
-                        ) : null}
+                            {canShowNewActions ? (
+                                <NewActionsMenu
+                                    folderPublicId={folder.public_id}
+                                    parentFolderId={folder.public_id}
+                                    defaultScope={
+                                        folder.visibility === 'department'
+                                            ? 'department'
+                                            : 'private'
+                                    }
+                                    showScope={false}
+                                    canCreateFolder={canCreateFolderInFolder}
+                                    canUpload={canUploadToFolder}
+                                    onUploadProcessingChange={
+                                        setIsUploadProcessing
+                                    }
+                                />
+                            ) : null}
+                        </div>
                     </div>
                 </div>
 
@@ -158,6 +175,7 @@ export default function FolderShow({
                         files={files.data}
                         currentUser={page.props.auth.user}
                         loading={isListLoading}
+                        layoutMode={layoutMode}
                         onBulkTrash={moveSelectionToTrash}
                         onBulkDownload={({ files: selectedFiles }) => {
                             downloadSelectionFiles({ files: selectedFiles });

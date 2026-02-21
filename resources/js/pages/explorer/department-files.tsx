@@ -11,8 +11,10 @@ import {
     type FileRow,
     type FolderRow,
 } from '@/components/file-manager/file-table';
+import { LayoutModeToggle } from '@/components/file-manager/layout-mode-toggle';
 import { NewActionsMenu } from '@/components/file-manager/new-actions-menu';
 import { ShareModal } from '@/components/file-manager/share-modal';
+import { useFileLayoutMode } from '@/hooks/use-file-layout-mode';
 import { usePageLoading } from '@/hooks/use-page-loading';
 import AppLayout from '@/layouts/app-layout';
 import { promptReplaceFile } from '@/lib/file-replace-actions';
@@ -45,6 +47,9 @@ const breadcrumbs: BreadcrumbItem[] = [
 export default function DepartmentFiles({ folders, files }: PageProps) {
     const page = usePage<AuthPageProps>();
     const isPageLoading = usePageLoading();
+    const [layoutMode, setLayoutMode] = useFileLayoutMode(
+        'explorer-layout-department-files',
+    );
     const [isUploadProcessing, setIsUploadProcessing] = useState(false);
     const [selectedForShare, setSelectedForShare] = useState<
         | { kind: 'file'; file: FileRow }
@@ -69,17 +74,23 @@ export default function DepartmentFiles({ folders, files }: PageProps) {
             <div className="space-y-6 p-4 md:p-6">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <h1 className="text-xl font-semibold">Department Files</h1>
-                    <NewActionsMenu
-                        uploadFolderOptions={folders.map((folder) => ({
-                            public_id: folder.public_id,
-                            name: folder.name,
-                            path: folder.path,
-                        }))}
-                        defaultScope="department"
-                        showScope={false}
-                        canCreateFolder={canCreateDepartmentFolder}
-                        onUploadProcessingChange={setIsUploadProcessing}
-                    />
+                    <div className="flex items-center gap-2">
+                        <LayoutModeToggle
+                            value={layoutMode}
+                            onValueChange={setLayoutMode}
+                        />
+                        <NewActionsMenu
+                            uploadFolderOptions={folders.map((folder) => ({
+                                public_id: folder.public_id,
+                                name: folder.name,
+                                path: folder.path,
+                            }))}
+                            defaultScope="department"
+                            showScope={false}
+                            canCreateFolder={canCreateDepartmentFolder}
+                            onUploadProcessingChange={setIsUploadProcessing}
+                        />
+                    </div>
                 </div>
 
                 <div className="space-y-3">
@@ -126,6 +137,7 @@ export default function DepartmentFiles({ folders, files }: PageProps) {
                         showSharingMarker={false}
                         currentUser={page.props.auth.user}
                         loading={isListLoading}
+                        layoutMode={layoutMode}
                         onBulkTrash={moveSelectionToTrash}
                         onBulkDownload={({ files: selectedFiles }) => {
                             downloadSelectionFiles({ files: selectedFiles });

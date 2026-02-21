@@ -4,7 +4,9 @@ import {
     type FileRow,
     type FolderRow,
 } from '@/components/file-manager/file-table';
+import { LayoutModeToggle } from '@/components/file-manager/layout-mode-toggle';
 import { TrashView } from '@/components/file-manager/trash-view';
+import { useFileLayoutMode } from '@/hooks/use-file-layout-mode';
 import { usePageLoading } from '@/hooks/use-page-loading';
 import AppLayout from '@/layouts/app-layout';
 import type { BreadcrumbItem } from '@/types';
@@ -30,6 +32,9 @@ export default function TrashFolder({
     files,
 }: PageProps) {
     const isPageLoading = usePageLoading();
+    const [layoutMode, setLayoutMode] = useFileLayoutMode(
+        'explorer-layout-trash',
+    );
 
     const breadcrumbs: BreadcrumbItem[] = useMemo(
         () => [
@@ -46,13 +51,18 @@ export default function TrashFolder({
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title={`Trash - ${folder.name}`} />
             <div className="space-y-4 p-4 md:p-6">
-                <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                     <h1 className="text-xl font-semibold">{folder.name}</h1>
+                    <LayoutModeToggle
+                        value={layoutMode}
+                        onValueChange={setLayoutMode}
+                    />
                 </div>
                 <TrashView
                     folders={children}
                     files={files.data}
                     loading={isPageLoading}
+                    layoutMode={layoutMode}
                 />
             </div>
         </AppLayout>

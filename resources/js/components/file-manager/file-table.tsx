@@ -34,6 +34,13 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
+    ContextMenu,
+    ContextMenuContent,
+    ContextMenuItem,
+    ContextMenuSeparator,
+    ContextMenuTrigger,
+} from '@/components/ui/context-menu';
+import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
@@ -170,6 +177,7 @@ type FileTableProps = {
     loading?: boolean;
     emptyMessage?: string;
     viewMode?: 'default' | 'trash';
+    layoutMode?: 'table' | 'context';
 };
 
 const IMAGE_EXTENSIONS = new Set([
@@ -398,27 +406,27 @@ function fileExtension(file: FileRow): string {
     return fromName;
 }
 
-function fileIconNode(file: FileRow) {
+function fileIconNode(file: FileRow, iconClassName = 'size-5') {
     const mimeType = (file.mime_type ?? '').toLowerCase();
     const extension = fileExtension(file);
 
     if (mimeType.startsWith('image/') || IMAGE_EXTENSIONS.has(extension)) {
-        return <FileImage className="size-5" />;
+        return <FileImage className={iconClassName} />;
     }
 
     if (mimeType.startsWith('video/') || VIDEO_EXTENSIONS.has(extension)) {
-        return <FileVideo className="size-5" />;
+        return <FileVideo className={iconClassName} />;
     }
 
     if (mimeType.startsWith('audio/') || AUDIO_EXTENSIONS.has(extension)) {
-        return <FileAudio className="size-5" />;
+        return <FileAudio className={iconClassName} />;
     }
 
     if (
         mimeType === 'application/pdf' ||
         extension === 'pdf'
     ) {
-        return <FileType className="size-5" />;
+        return <FileType className={iconClassName} />;
     }
 
     if (
@@ -428,7 +436,7 @@ function fileIconNode(file: FileRow) {
         mimeType.includes('gzip') ||
         ARCHIVE_EXTENSIONS.has(extension)
     ) {
-        return <FileArchive className="size-5" />;
+        return <FileArchive className={iconClassName} />;
     }
 
     if (
@@ -437,7 +445,7 @@ function fileIconNode(file: FileRow) {
         mimeType.includes('csv') ||
         SPREADSHEET_EXTENSIONS.has(extension)
     ) {
-        return <FileSpreadsheet className="size-5" />;
+        return <FileSpreadsheet className={iconClassName} />;
     }
 
     if (
@@ -449,10 +457,10 @@ function fileIconNode(file: FileRow) {
         mimeType.startsWith('text/x-') ||
         CODE_EXTENSIONS.has(extension)
     ) {
-        return <FileCode2 className="size-5" />;
+        return <FileCode2 className={iconClassName} />;
     }
 
-    return <FileText className="size-5" />;
+    return <FileText className={iconClassName} />;
 }
 
 type OwnerCellProps = {
@@ -624,6 +632,7 @@ export function FileTable({
     loading = false,
     emptyMessage = 'No files or folders found.',
     viewMode = 'default',
+    layoutMode = 'table',
 }: FileTableProps) {
     const rows: UnifiedRow[] = useMemo(
         () => [
@@ -978,7 +987,7 @@ export function FileTable({
     };
 
     const handleRowMouseDown = (
-        event: MouseEvent<HTMLTableRowElement>,
+        event: MouseEvent<HTMLElement>,
         row: UnifiedRow,
         rowIndex: number,
     ) => {
@@ -1011,7 +1020,7 @@ export function FileTable({
     };
 
     const handleRowMouseEnter = (
-        event: MouseEvent<HTMLTableRowElement>,
+        event: MouseEvent<HTMLElement>,
         rowIndex: number,
     ) => {
         if (!dragSelectionRef.current.active) {
@@ -1028,7 +1037,7 @@ export function FileTable({
     };
 
     const handleRowDoubleClick = (
-        event: MouseEvent<HTMLTableRowElement>,
+        event: MouseEvent<HTMLElement>,
         row: UnifiedRow,
     ) => {
         if (isInteractiveTarget(event.target)) {
@@ -1054,6 +1063,14 @@ export function FileTable({
         window.location.assign(`/files/${row.value.public_id}/download`);
     };
 
+    const handleRowContextMenu = (row: UnifiedRow) => {
+        if (selectedKeySet.has(row.key)) {
+            return;
+        }
+
+        setSelectedKeys([row.key]);
+    };
+
     if (loading) {
         return <TableCardSkeleton columns={isTrashMode ? 6 : 5} rows={8} />;
     }
@@ -1067,7 +1084,7 @@ export function FileTable({
     }
 
     return (
-        <div className="relative overflow-hidden rounded-xl border border-border bg-card">
+        <div className="relative overflow-hidden rounded-xl bg-transparent">
             {effectiveSelectedKeys.length ? (
                 <div className="pointer-events-none absolute top-2 right-3 left-3 z-20">
                     <div className="pointer-events-auto inline-flex flex-wrap items-center gap-2 rounded-md border border-border/80 bg-background/95 px-2 py-1 text-xs text-muted-foreground shadow-soft-sm backdrop-blur">
@@ -1168,7 +1185,370 @@ export function FileTable({
                     ) : null}
                 </div>
             ) : null}
-            <div className="overflow-x-auto">
+            {layoutMode === 'context' ? (
+                <div
+                    className={cn(
+                        'space-y-2 p-2',
+                        effectiveSelectedKeys.length ? 'pt-12' : '',
+                    )}
+                >
+                    <div className="flex flex-wrap gap-3">
+                        {rows.map((row, rowIndex) => (
+                            <ContextMenu key={row.key}>
+                                <ContextMenuTrigger asChild>
+                                    <div
+                                        className={cn(
+                                            'flex w-[116px] flex-col items-center gap-1.5 rounded-md p-1.5 text-center transition-colors select-none',
+                                            selectedKeySet.has(row.key)
+                                                ? 'bg-primary/10'
+                                                : 'hover:bg-muted/35',
+                                        )}
+                                        onMouseDown={(event) =>
+                                            handleRowMouseDown(event, row, rowIndex)
+                                        }
+                                        onMouseEnter={(event) =>
+                                            handleRowMouseEnter(event, rowIndex)
+                                        }
+                                        onDoubleClick={(event) =>
+                                            handleRowDoubleClick(event, row)
+                                        }
+                                        onContextMenu={() =>
+                                            handleRowContextMenu(row)
+                                        }
+                                    >
+                                        {row.kind === 'folder' ? (
+                                            <div className="flex w-full flex-col items-center gap-1.5">
+                                                <div className="inline-flex size-[72px] items-center justify-center rounded-md bg-muted/60 text-muted-foreground">
+                                                    <Folder className="size-8" />
+                                                </div>
+                                                <div className="w-full min-w-0">
+                                                    <p
+                                                        className="truncate text-[12px] font-medium text-foreground"
+                                                        title={row.value.name}
+                                                    >
+                                                        {row.value.name}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex w-full flex-col items-center gap-1.5">
+                                                <div className="inline-flex size-[72px] items-center justify-center rounded-md bg-primary/10 text-primary">
+                                                    {fileIconNode(
+                                                        row.value,
+                                                        'size-8',
+                                                    )}
+                                                </div>
+                                                <div className="w-full min-w-0">
+                                                    <p
+                                                        className="truncate text-[12px] font-medium text-foreground"
+                                                        title={row.value.original_name}
+                                                    >
+                                                        {row.value.original_name}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </ContextMenuTrigger>
+                                <ContextMenuContent>
+                                    {row.kind === 'folder' ? (
+                                        isTrashMode ? (
+                                            <>
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onRestoreFolder?.(
+                                                            row.value,
+                                                        );
+                                                    }}
+                                                >
+                                                    <RotateCcw className="mr-2" />
+                                                    Restore
+                                                </ContextMenuItem>
+                                                <ContextMenuItem
+                                                    variant="destructive"
+                                                    disabled={!onPurgeFolder}
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onPurgeFolder?.(
+                                                            row.value,
+                                                        );
+                                                    }}
+                                                >
+                                                    <Trash2 className="mr-2" />
+                                                    Delete forever
+                                                </ContextMenuItem>
+                                            </>
+                                        ) : (
+                                            <>
+                                                {onPreviewFolder ? (
+                                                    <ContextMenuItem
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            onPreviewFolder(
+                                                                row.value,
+                                                            );
+                                                        }}
+                                                    >
+                                                        <Eye className="mr-2" />
+                                                        Preview
+                                                    </ContextMenuItem>
+                                                ) : null}
+                                                {onMoveFolder &&
+                                                row.value.access?.can_edit !==
+                                                    false ? (
+                                                    <ContextMenuItem
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            onMoveFolder(
+                                                                row.value,
+                                                            );
+                                                        }}
+                                                    >
+                                                        <FolderInput className="mr-2" />
+                                                        Move to
+                                                    </ContextMenuItem>
+                                                ) : null}
+                                                {onRenameFolder &&
+                                                row.value.access?.can_edit !==
+                                                    false ? (
+                                                    <ContextMenuItem
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            onRenameFolder(
+                                                                row.value,
+                                                            );
+                                                        }}
+                                                    >
+                                                        <Pencil className="mr-2" />
+                                                        Rename
+                                                    </ContextMenuItem>
+                                                ) : null}
+                                                {onDetailsFolder ? (
+                                                    <ContextMenuItem
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            onDetailsFolder(
+                                                                row.value,
+                                                            );
+                                                        }}
+                                                    >
+                                                        <Info className="mr-2" />
+                                                        Details
+                                                    </ContextMenuItem>
+                                                ) : null}
+                                                {onRemoveFolderAccess ? (
+                                                    <ContextMenuItem
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            onRemoveFolderAccess(
+                                                                row.value,
+                                                            );
+                                                        }}
+                                                    >
+                                                        <X className="mr-2" />
+                                                        Remove from my files
+                                                    </ContextMenuItem>
+                                                ) : null}
+                                                <ContextMenuSeparator />
+                                                <ContextMenuItem asChild>
+                                                    <Link
+                                                        href={`/folders/${row.value.public_id}/download`}
+                                                        className="block w-full cursor-pointer"
+                                                    >
+                                                        <Download className="mr-2" />
+                                                        Download
+                                                    </Link>
+                                                </ContextMenuItem>
+                                                {onShareFolder &&
+                                                row.value.access?.can_edit !==
+                                                    false ? (
+                                                    <ContextMenuItem
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            onShareFolder(
+                                                                row.value,
+                                                            );
+                                                        }}
+                                                    >
+                                                        <Share2 className="mr-2" />
+                                                        Share
+                                                    </ContextMenuItem>
+                                                ) : null}
+                                                {onDeleteFolder &&
+                                                row.value.access?.can_delete !==
+                                                    false ? (
+                                                    <ContextMenuItem
+                                                        variant="destructive"
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            onDeleteFolder(
+                                                                row.value,
+                                                            );
+                                                        }}
+                                                    >
+                                                        <Trash2 className="mr-2" />
+                                                        Move to trash
+                                                    </ContextMenuItem>
+                                                ) : null}
+                                            </>
+                                        )
+                                    ) : isTrashMode ? (
+                                        <>
+                                            <ContextMenuItem
+                                                onSelect={(event) => {
+                                                    event.preventDefault();
+                                                    onRestoreFile?.(row.value);
+                                                }}
+                                            >
+                                                <RotateCcw className="mr-2" />
+                                                Restore
+                                            </ContextMenuItem>
+                                            <ContextMenuItem
+                                                variant="destructive"
+                                                disabled={!onPurgeFile}
+                                                onSelect={(event) => {
+                                                    event.preventDefault();
+                                                    onPurgeFile?.(row.value);
+                                                }}
+                                            >
+                                                <Trash2 className="mr-2" />
+                                                Delete forever
+                                            </ContextMenuItem>
+                                        </>
+                                    ) : (
+                                        <>
+                                            {onPreviewFile ? (
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onPreviewFile(
+                                                            row.value,
+                                                        );
+                                                    }}
+                                                >
+                                                    <Eye className="mr-2" />
+                                                    Preview
+                                                </ContextMenuItem>
+                                            ) : null}
+                                            {onMoveFile &&
+                                            row.value.access?.can_edit !==
+                                                false ? (
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onMoveFile(row.value);
+                                                    }}
+                                                >
+                                                    <FolderInput className="mr-2" />
+                                                    Move to
+                                                </ContextMenuItem>
+                                            ) : null}
+                                            {row.value.access?.can_download ===
+                                            false ? (
+                                                <ContextMenuItem disabled>
+                                                    <Download className="mr-2" />
+                                                    Download
+                                                </ContextMenuItem>
+                                            ) : (
+                                                <ContextMenuItem asChild>
+                                                    <Link
+                                                        href={`/files/${row.value.public_id}/download`}
+                                                        className="block w-full cursor-pointer"
+                                                    >
+                                                        <Download className="mr-2" />
+                                                        Download
+                                                    </Link>
+                                                </ContextMenuItem>
+                                            )}
+                                            {onShare &&
+                                            row.value.access?.can_edit !==
+                                                false ? (
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onShare(row.value);
+                                                    }}
+                                                >
+                                                    <Share2 className="mr-2" />
+                                                    Share
+                                                </ContextMenuItem>
+                                            ) : null}
+                                            {onRename &&
+                                            row.value.access?.can_edit !==
+                                                false ? (
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onRename(row.value);
+                                                    }}
+                                                >
+                                                    <Pencil className="mr-2" />
+                                                    Rename
+                                                </ContextMenuItem>
+                                            ) : null}
+                                            {onReplace &&
+                                            row.value.access?.can_edit !==
+                                                false ? (
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onReplace(row.value);
+                                                    }}
+                                                >
+                                                    <Upload className="mr-2" />
+                                                    Replace
+                                                </ContextMenuItem>
+                                            ) : null}
+                                            {onDetailsFile ? (
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onDetailsFile(
+                                                            row.value,
+                                                        );
+                                                    }}
+                                                >
+                                                    <Info className="mr-2" />
+                                                    Details
+                                                </ContextMenuItem>
+                                            ) : null}
+                                            {onRemoveFileAccess ? (
+                                                <ContextMenuItem
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onRemoveFileAccess(
+                                                            row.value,
+                                                        );
+                                                    }}
+                                                >
+                                                    <X className="mr-2" />
+                                                    Remove from my files
+                                                </ContextMenuItem>
+                                            ) : null}
+                                            {onDelete &&
+                                            row.value.access?.can_delete !==
+                                                false ? (
+                                                <ContextMenuItem
+                                                    variant="destructive"
+                                                    onSelect={(event) => {
+                                                        event.preventDefault();
+                                                        onDelete(row.value);
+                                                    }}
+                                                >
+                                                    <Trash2 className="mr-2" />
+                                                    Move to trash
+                                                </ContextMenuItem>
+                                            ) : null}
+                                        </>
+                                    )}
+                                </ContextMenuContent>
+                            </ContextMenu>
+                        ))}
+                    </div>
+                </div>
+            ) : (
+                <div className="overflow-x-auto">
                 <table
                     className={cn(
                         'w-full table-fixed text-sm',
@@ -1792,6 +2172,7 @@ export function FileTable({
                     </tbody>
                 </table>
             </div>
+            )}
         </div>
     );
 }

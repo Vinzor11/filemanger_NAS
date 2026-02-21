@@ -4,6 +4,7 @@ import {
     type FileRow,
     type FolderRow,
 } from '@/components/file-manager/file-table';
+import { type FileLayoutMode } from '@/hooks/use-file-layout-mode';
 import { deleteSelectionForever } from '@/lib/purge-actions';
 import { restoreSelection } from '@/lib/restore-actions';
 
@@ -21,9 +22,15 @@ type TrashViewProps = {
     folders: FolderRow[];
     files: FileRow[];
     loading?: boolean;
+    layoutMode?: FileLayoutMode;
 };
 
-export function TrashView({ folders, files, loading = false }: TrashViewProps) {
+export function TrashView({
+    folders,
+    files,
+    loading = false,
+    layoutMode = 'table',
+}: TrashViewProps) {
     const page = usePage<AuthPageProps>();
 
     return (
@@ -33,6 +40,7 @@ export function TrashView({ folders, files, loading = false }: TrashViewProps) {
             currentUser={page.props.auth.user}
             loading={loading}
             viewMode="trash"
+            layoutMode={layoutMode}
             emptyMessage="Trash is empty."
             onOpenFolder={(folder) =>
                 router.visit(`/trash/folders/${folder.public_id}`)
