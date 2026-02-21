@@ -5,6 +5,7 @@ namespace Tests\Feature\Explorer;
 use App\Jobs\ComputeChecksumJob;
 use App\Jobs\VirusScanJob;
 use App\Models\File;
+use App\Services\ExplorerService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
@@ -137,5 +138,177 @@ class FileUploadFlowTest extends TestCase
         ]);
         Queue::assertPushed(ComputeChecksumJob::class, 1);
         Queue::assertPushed(VirusScanJob::class, 1);
+    }
+
+    public function test_upload_into_shared_folder_sets_owner_to_uploader_not_folder_owner(): void
+    {
+        config(['antivirus.enabled' => true]);
+        Storage::fake($this->fileStorageDisk());
+        Queue::fake();
+
+        $department = $this->createDepartment();
+        $folderOwner = $this->createUser($department);
+        $recipient = $this->createUser($department);
+
+        $this->grantPermissions($folderOwner, ['share.manage', 'files.view']);
+        $this->grantPermissions($recipient, ['files.upload']);
+
+        $sharedFolder = $this->createPrivateFolder($folderOwner, [
+            'name' => 'Shared Upload Target',
+            'path' => 'Shared Upload Target',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($folderOwner)->post(route('folders.share.users', $sharedFolder->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $recipient->id,
+                    'can_view' => true,
+                    'can_upload' => true,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $response = $this->actingAs($recipient)
+            ->from(route('explorer.shared'))
+            ->withHeader('X-Idempotency-Key', 'upload-shared-folder-owner-1')
+            ->post(route('files.upload'), [
+                'folder_id' => $sharedFolder->public_id,
+                'file' => UploadedFile::fake()->create('shared-upload.txt', 5, 'text/plain'),
+            ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('files', [
+            'folder_id' => $sharedFolder->id,
+            'original_name' => 'shared-upload.txt',
+            'owner_user_id' => $recipient->id,
+            'is_deleted' => false,
+        ]);
+        $this->assertDatabaseMissing('files', [
+            'folder_id' => $sharedFolder->id,
+            'original_name' => 'shared-upload.txt',
+            'owner_user_id' => $folderOwner->id,
+            'is_deleted' => false,
+        ]);
+    }
+
+    public function test_replace_upload_in_shared_folder_transfers_owner_to_uploader(): void
+    {
+        config(['antivirus.enabled' => true]);
+        Storage::fake($this->fileStorageDisk());
+        Queue::fake();
+
+        $department = $this->createDepartment();
+        $folderOwner = $this->createUser($department);
+        $recipient = $this->createUser($department);
+
+        $this->grantPermissions($folderOwner, ['share.manage', 'files.view']);
+        $this->grantPermissions($recipient, ['files.upload']);
+
+        $sharedFolder = $this->createPrivateFolder($folderOwner, [
+            'name' => 'Shared Replace Target',
+            'path' => 'Shared Replace Target',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->createFile($sharedFolder, $folderOwner, [
+            'original_name' => 'replace-me.txt',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($folderOwner)->post(route('folders.share.users', $sharedFolder->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $recipient->id,
+                    'can_view' => true,
+                    'can_upload' => true,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $response = $this->actingAs($recipient)
+            ->from(route('explorer.shared'))
+            ->withHeader('X-Idempotency-Key', 'upload-shared-folder-owner-replace-1')
+            ->post(route('files.upload'), [
+                'folder_id' => $sharedFolder->public_id,
+                'file' => UploadedFile::fake()->create('replace-me.txt', 6, 'text/plain'),
+                'duplicate_mode' => 'replace',
+            ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('files', [
+            'folder_id' => $sharedFolder->id,
+            'original_name' => 'replace-me.txt',
+            'owner_user_id' => $recipient->id,
+            'is_deleted' => false,
+        ]);
+        $this->assertDatabaseMissing('files', [
+            'folder_id' => $sharedFolder->id,
+            'original_name' => 'replace-me.txt',
+            'owner_user_id' => $folderOwner->id,
+            'is_deleted' => false,
+        ]);
+    }
+
+    public function test_shared_folder_contents_show_recipient_as_owner_for_uploaded_file(): void
+    {
+        config(['antivirus.enabled' => true]);
+        Storage::fake($this->fileStorageDisk());
+        Queue::fake();
+
+        $department = $this->createDepartment();
+        $folderOwner = $this->createUser($department);
+        $recipient = $this->createUser($department);
+
+        $this->grantPermissions($folderOwner, ['share.manage', 'files.view']);
+        $this->grantPermissions($recipient, ['files.upload']);
+
+        $sharedFolder = $this->createPrivateFolder($folderOwner, [
+            'name' => 'Shared Owner Rendering Target',
+            'path' => 'Shared Owner Rendering Target',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($folderOwner)->post(route('folders.share.users', $sharedFolder->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $recipient->id,
+                    'can_view' => true,
+                    'can_upload' => true,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $this->actingAs($recipient)
+            ->from(route('explorer.shared'))
+            ->withHeader('X-Idempotency-Key', 'upload-shared-folder-owner-payload-1')
+            ->post(route('files.upload'), [
+                'folder_id' => $sharedFolder->public_id,
+                'file' => UploadedFile::fake()->create('recipient-owned.txt', 7, 'text/plain'),
+            ])
+            ->assertRedirect();
+
+        $payload = app(ExplorerService::class)->folderContents(
+            $recipient,
+            $sharedFolder->fresh(),
+            ['per_page' => 20],
+        );
+        $fileRow = collect($payload['files']->items())
+            ->firstWhere('original_name', 'recipient-owned.txt');
+
+        $this->assertNotNull($fileRow);
+        $this->assertSame($recipient->email, data_get($fileRow, 'owner.email'));
+        $this->assertSame('my_files', data_get($fileRow, 'source.scope'));
+        $this->assertTrue((bool) data_get($fileRow, 'access.can_delete'));
     }
 }

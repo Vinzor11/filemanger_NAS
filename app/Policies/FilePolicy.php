@@ -18,6 +18,10 @@ class FilePolicy
             return false;
         }
 
+        if ($file->owner_user_id === $user->id) {
+            return true;
+        }
+
         if ($this->hasDirectFilePermission($user, $file, 'can_view')
             || $this->hasFolderPermission($user, $file, 'can_view')
         ) {
@@ -26,10 +30,6 @@ class FilePolicy
 
         if (! $user->can('files.view')) {
             return false;
-        }
-
-        if ($file->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $file->department_id)
@@ -52,6 +52,10 @@ class FilePolicy
             return false;
         }
 
+        if ($file->owner_user_id === $user->id) {
+            return true;
+        }
+
         if ($this->hasDirectFilePermission($user, $file, 'can_download')
             || $this->hasFolderPermission($user, $file, 'can_view')
         ) {
@@ -60,10 +64,6 @@ class FilePolicy
 
         if (! $user->can('files.download') || ! $this->view($user, $file)) {
             return false;
-        }
-
-        if ($file->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $file->department_id) && $file->visibility !== 'private') {
@@ -80,6 +80,10 @@ class FilePolicy
 
     public function update(User $user, File $file): bool
     {
+        if ($file->owner_user_id === $user->id) {
+            return true;
+        }
+
         if ($this->hasDirectFilePermission($user, $file, 'can_edit')
             || $this->hasFolderPermission($user, $file, 'can_edit')
         ) {
@@ -88,10 +92,6 @@ class FilePolicy
 
         if (! $user->can('files.update')) {
             return false;
-        }
-
-        if ($file->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $file->department_id)) {
@@ -108,6 +108,10 @@ class FilePolicy
 
     public function delete(User $user, File $file): bool
     {
+        if ($file->owner_user_id === $user->id) {
+            return true;
+        }
+
         if ($this->hasDirectFilePermission($user, $file, 'can_delete')
             || $this->hasFolderPermission($user, $file, 'can_delete')
         ) {
@@ -116,10 +120,6 @@ class FilePolicy
 
         if (! $user->can('files.delete')) {
             return false;
-        }
-
-        if ($file->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $file->department_id)) {
@@ -135,16 +135,28 @@ class FilePolicy
 
     public function restore(User $user, File $file): bool
     {
+        if ($file->owner_user_id === $user->id) {
+            return true;
+        }
+
         return $user->can('files.restore') && $this->delete($user, $file);
     }
 
     public function share(User $user, File $file): bool
     {
+        if ($file->is_deleted) {
+            return false;
+        }
+
+        if ($file->owner_user_id === $user->id) {
+            return true;
+        }
+
         if (! $user->can('share.manage') || ! $this->view($user, $file)) {
             return false;
         }
 
-        if ($file->owner_user_id === $user->id || $this->isSameDepartment($user, $file->department_id)) {
+        if ($this->isSameDepartment($user, $file->department_id)) {
             return true;
         }
 

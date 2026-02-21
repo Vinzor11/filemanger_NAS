@@ -87,17 +87,29 @@ export default function SharedWithMe({ folders, files }: PageProps) {
                     currentUser={page.props.auth.user}
                     loading={isPageLoading}
                     layoutMode={layoutMode}
-                    onBulkDownload={({ files: selectedFiles }) => {
-                        downloadSelectionFiles({ files: selectedFiles });
+                    onBulkDownload={({
+                        files: selectedFiles,
+                        folders: selectedFolders,
+                    }) => {
+                        downloadSelectionFiles({
+                            files: selectedFiles,
+                            folders: selectedFolders,
+                        });
                     }}
-                    onBulkMove={({ files: selectedFiles }) => {
-                        if (selectedFiles.length < 1) {
+                    onBulkMove={({
+                        files: selectedFiles,
+                        folders: selectedFolders,
+                    }) => {
+                        if (
+                            selectedFiles.length + selectedFolders.length < 1
+                        ) {
                             return;
                         }
 
                         setMoveTarget({
-                            kind: 'bulk-files',
+                            kind: 'bulk-selection',
                             files: selectedFiles,
+                            folders: selectedFolders,
                         });
                     }}
                     onMoveFile={(file) => setMoveTarget({ kind: 'file', file })}

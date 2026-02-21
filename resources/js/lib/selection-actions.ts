@@ -6,16 +6,23 @@ type SelectionItem = {
 
 export function downloadSelectionFiles({
     files,
+    folders,
 }: {
     files: SelectionItem[];
+    folders: SelectionItem[];
 }): void {
-    if (files.length === 0 || typeof window === 'undefined') {
+    const totalItems = files.length + folders.length;
+
+    if (totalItems === 0 || typeof window === 'undefined') {
         return;
     }
 
     const params = new URLSearchParams();
     files.forEach((file) => {
         params.append('files[]', file.public_id);
+    });
+    folders.forEach((folder) => {
+        params.append('folders[]', folder.public_id);
     });
 
     window.open(
@@ -26,7 +33,7 @@ export function downloadSelectionFiles({
 
     emitToast({
         kind: 'success',
-        message: `Preparing download for ${files.length} file${files.length === 1 ? '' : 's'}.`,
+        message: `Preparing download for ${totalItems} item${totalItems === 1 ? '' : 's'}.`,
         durationMs: 3500,
     });
 }

@@ -17,16 +17,16 @@ class FolderPolicy
             return false;
         }
 
+        if ($folder->owner_user_id === $user->id) {
+            return true;
+        }
+
         if ($this->hasFolderPermission($user, $folder, 'can_view')) {
             return true;
         }
 
         if (! $user->can('files.view')) {
             return false;
-        }
-
-        if ($folder->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $folder->department_id)
@@ -44,6 +44,10 @@ class FolderPolicy
 
     public function create(User $user, ?Folder $parent = null): bool
     {
+        if ($parent !== null && $parent->owner_user_id === $user->id) {
+            return true;
+        }
+
         if (! $user->can('folders.create')) {
             return false;
         }
@@ -57,16 +61,16 @@ class FolderPolicy
 
     public function update(User $user, Folder $folder): bool
     {
+        if ($folder->owner_user_id === $user->id) {
+            return true;
+        }
+
         if ($this->hasFolderPermission($user, $folder, 'can_edit')) {
             return true;
         }
 
         if (! $user->can('folders.update')) {
             return false;
-        }
-
-        if ($folder->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $folder->department_id)) {
@@ -86,6 +90,10 @@ class FolderPolicy
             return false;
         }
 
+        if ($folder->owner_user_id === $user->id) {
+            return true;
+        }
+
         if (
             $this->hasFolderPermission($user, $folder, 'can_upload') ||
             $this->hasFolderPermission($user, $folder, 'can_edit')
@@ -95,10 +103,6 @@ class FolderPolicy
 
         if (! $user->can('files.upload')) {
             return false;
-        }
-
-        if ($folder->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $folder->department_id)) {
@@ -114,16 +118,16 @@ class FolderPolicy
 
     public function delete(User $user, Folder $folder): bool
     {
+        if ($folder->owner_user_id === $user->id) {
+            return true;
+        }
+
         if ($this->hasFolderPermission($user, $folder, 'can_delete')) {
             return true;
         }
 
         if (! $user->can('folders.delete')) {
             return false;
-        }
-
-        if ($folder->owner_user_id === $user->id) {
-            return true;
         }
 
         if ($this->isSameDepartment($user, $folder->department_id)) {
@@ -139,16 +143,28 @@ class FolderPolicy
 
     public function restore(User $user, Folder $folder): bool
     {
+        if ($folder->owner_user_id === $user->id) {
+            return true;
+        }
+
         return $user->can('folders.restore') && $this->delete($user, $folder);
     }
 
     public function share(User $user, Folder $folder): bool
     {
+        if ($folder->is_deleted) {
+            return false;
+        }
+
+        if ($folder->owner_user_id === $user->id) {
+            return true;
+        }
+
         if (! $user->can('share.manage') || ! $this->view($user, $folder)) {
             return false;
         }
 
-        if ($folder->owner_user_id === $user->id || $this->isSameDepartment($user, $folder->department_id)) {
+        if ($this->isSameDepartment($user, $folder->department_id)) {
             return true;
         }
 

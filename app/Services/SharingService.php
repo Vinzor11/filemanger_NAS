@@ -347,6 +347,20 @@ class SharingService
     {
         return FilePermission::query()
             ->where('file_id', $file->id)
+            ->where('can_view', true)
+            ->with('user:id,public_id,email')
+            ->orderBy('user_id')
+            ->get();
+    }
+
+    /**
+     * @return Collection<int, FolderPermission>
+     */
+    public function listFolderUserShares(Folder $folder): Collection
+    {
+        return FolderPermission::query()
+            ->where('folder_id', $folder->id)
+            ->where('can_view', true)
             ->with('user:id,public_id,email')
             ->orderBy('user_id')
             ->get();
@@ -479,6 +493,35 @@ class SharingService
                 meta: [
                     'request_id' => $request->attributes->get('request_id'),
                     'folder_public_id' => $folder->public_id,
+                ],
+                request: $request,
+            );
+        });
+    }
+
+    public function revokeFolderUserShare(User $actor, Folder $folder, User $targetUser, Request $request): void
+    {
+        DB::transaction(function () use ($actor, $folder, $targetUser, $request): void {
+            $deleted = FolderPermission::query()
+                ->where('folder_id', $folder->id)
+                ->where('user_id', $targetUser->id)
+                ->delete();
+
+            if (! $deleted) {
+                throw ValidationException::withMessages([
+                    'share' => 'Share permission does not exist for this user.',
+                ]);
+            }
+
+            $this->auditLogService->log(
+                actor: $actor,
+                action: 'share.user.revoked',
+                entityType: 'folder',
+                entityId: $folder->id,
+                meta: [
+                    'request_id' => $request->attributes->get('request_id'),
+                    'folder_public_id' => $folder->public_id,
+                    'target_user_public_id' => $targetUser->public_id,
                 ],
                 request: $request,
             );

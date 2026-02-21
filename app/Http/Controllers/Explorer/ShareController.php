@@ -108,6 +108,15 @@ class ShareController extends Controller
         return back()->with('status', 'Folder sharing updated.');
     }
 
+    public function listFolderUserShares(Request $request, Folder $folder): JsonResponse
+    {
+        $this->authorize('share', $folder);
+
+        return response()->json([
+            'data' => $this->sharingService->listFolderUserShares($folder),
+        ]);
+    }
+
     public function listUserShares(Request $request, File $file): JsonResponse
     {
         $this->authorize('share', $file);
@@ -137,6 +146,15 @@ class ShareController extends Controller
         $this->authorize('share', $file);
 
         $this->sharingService->revokeUserShare($request->user(), $file, $targetUser, $request);
+
+        return back()->with('status', 'User share revoked.');
+    }
+
+    public function revokeFolderUserShare(Request $request, Folder $folder, User $targetUser): RedirectResponse
+    {
+        $this->authorize('share', $folder);
+
+        $this->sharingService->revokeFolderUserShare($request->user(), $folder, $targetUser, $request);
 
         return back()->with('status', 'User share revoked.');
     }

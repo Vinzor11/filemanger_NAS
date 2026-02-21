@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 export type MoveTarget =
     | { kind: 'file'; file: FileRow }
     | { kind: 'folder'; folder: FolderRow }
-    | { kind: 'bulk-files'; files: FileRow[] };
+    | { kind: 'bulk-selection'; files: FileRow[]; folders: FolderRow[] };
 
 export type DetailsTarget =
     | { kind: 'file'; file: FileRow }
@@ -177,6 +177,16 @@ export function FileItemActionDialogs({
             );
         }
 
+        if (moveTarget.kind === 'bulk-selection') {
+            const selectedFolderIds = new Set(
+                moveTarget.folders.map((folder) => folder.public_id),
+            );
+
+            return folders.filter(
+                (folder) => !selectedFolderIds.has(folder.public_id),
+            );
+        }
+
         return folders;
     }, [folders, moveTarget]);
     const detailsLabel = useMemo(() => {
@@ -188,13 +198,35 @@ export function FileItemActionDialogs({
             ? detailsTarget.file.original_name
             : detailsTarget.folder.name;
     }, [detailsTarget]);
+    const detailsSource = useMemo(() => {
+        if (!detailsTarget) {
+            return {
+                label: '-',
+                detail: null as string | null,
+            };
+        }
+
+        const source =
+            detailsTarget.kind === 'file'
+                ? detailsTarget.file.source
+                : detailsTarget.folder.source;
+        const label = (source?.label ?? '').trim();
+        const detail = (source?.detail ?? '').trim();
+
+        return {
+            label: label !== '' ? label : 'My Files',
+            detail: detail !== '' ? detail : null,
+        };
+    }, [detailsTarget]);
     const moveDescription = useMemo(() => {
         if (!moveTarget) {
             return 'Select the destination folder.';
         }
 
-        if (moveTarget.kind === 'bulk-files') {
-            return `Move ${moveTarget.files.length} selected file(s) to the destination folder.`;
+        if (moveTarget.kind === 'bulk-selection') {
+            const totalItems = moveTarget.files.length + moveTarget.folders.length;
+
+            return `Move ${totalItems} selected item(s) to the destination folder.`;
         }
 
         return 'Select the destination folder.';
@@ -355,12 +387,15 @@ export function FileItemActionDialogs({
                             setMoveError(null);
                             setIsMoveProcessing(true);
 
-                            if (moveTarget.kind === 'bulk-files') {
+                            if (moveTarget.kind === 'bulk-selection') {
                                 router.post(
                                     '/selection/move',
                                     {
                                         files: moveTarget.files.map(
                                             (file) => file.public_id,
+                                        ),
+                                        folders: moveTarget.folders.map(
+                                            (folder) => folder.public_id,
                                         ),
                                         destination_folder_id:
                                             selectedDestinationFolderId,
@@ -384,7 +419,7 @@ export function FileItemActionDialogs({
                                                         string | string[]
                                                     >,
                                                 ) ??
-                                                    'Unable to move selected files.',
+                                                    'Unable to move selected items.',
                                             );
                                         },
                                         onFinish: () => {
@@ -580,6 +615,19 @@ export function FileItemActionDialogs({
                                                 </dd>
                                             </div>
                                         )}
+                                        <div>
+                                            <dt className="text-xs text-muted-foreground">
+                                                Source
+                                            </dt>
+                                            <dd className="font-medium text-foreground">
+                                                {detailsSource.label}
+                                                {detailsSource.detail ? (
+                                                    <p className="text-xs font-normal text-muted-foreground">
+                                                        {detailsSource.detail}
+                                                    </p>
+                                                ) : null}
+                                            </dd>
+                                        </div>
                                         <div>
                                             <dt className="text-xs text-muted-foreground">
                                                 Created

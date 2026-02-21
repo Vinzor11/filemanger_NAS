@@ -13,7 +13,10 @@ import {
 } from '@/components/file-manager/file-table';
 import { LayoutModeToggle } from '@/components/file-manager/layout-mode-toggle';
 import { NewActionsMenu } from '@/components/file-manager/new-actions-menu';
-import { ShareModal } from '@/components/file-manager/share-modal';
+import {
+    ShareModal,
+    type ShareTarget,
+} from '@/components/file-manager/share-modal';
 import { useFileLayoutMode } from '@/hooks/use-file-layout-mode';
 import { usePageLoading } from '@/hooks/use-page-loading';
 import AppLayout from '@/layouts/app-layout';
@@ -51,12 +54,9 @@ export default function DepartmentFiles({ folders, files }: PageProps) {
         'explorer-layout-department-files',
     );
     const [isUploadProcessing, setIsUploadProcessing] = useState(false);
-    const [selectedForShare, setSelectedForShare] = useState<
-        | { kind: 'file'; file: FileRow }
-        | { kind: 'folder'; folder: FolderRow }
-        | { kind: 'bulk-files'; files: FileRow[] }
-        | null
-    >(null);
+    const [selectedForShare, setSelectedForShare] = useState<ShareTarget | null>(
+        null,
+    );
     const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
     const [previewFile, setPreviewFile] = useState<FileRow | null>(null);
     const [detailsTarget, setDetailsTarget] = useState<DetailsTarget | null>(
@@ -103,6 +103,8 @@ export default function DepartmentFiles({ folders, files }: PageProps) {
                                       ? `folder:${selectedForShare.folder.public_id}`
                                       : `bulk:${selectedForShare.files
                                             .map((file) => file.public_id)
+                                            .join('|')}:${selectedForShare.folders
+                                            .map((folder) => folder.public_id)
                                             .join('|')}`
                             }
                             target={selectedForShare}
@@ -134,32 +136,51 @@ export default function DepartmentFiles({ folders, files }: PageProps) {
                     <FileTable
                         folders={folders}
                         files={files.data}
-                        showSharingMarker={false}
                         currentUser={page.props.auth.user}
                         loading={isListLoading}
                         layoutMode={layoutMode}
                         onBulkTrash={moveSelectionToTrash}
-                        onBulkDownload={({ files: selectedFiles }) => {
-                            downloadSelectionFiles({ files: selectedFiles });
+                        onBulkDownload={({
+                            files: selectedFiles,
+                            folders: selectedFolders,
+                        }) => {
+                            downloadSelectionFiles({
+                                files: selectedFiles,
+                                folders: selectedFolders,
+                            });
                         }}
-                        onBulkShare={({ files: selectedFiles }) => {
-                            if (selectedFiles.length < 1) {
+                        onBulkShare={({
+                            files: selectedFiles,
+                            folders: selectedFolders,
+                        }) => {
+                            if (
+                                selectedFiles.length + selectedFolders.length <
+                                1
+                            ) {
                                 return;
                             }
 
                             setSelectedForShare({
-                                kind: 'bulk-files',
+                                kind: 'bulk-selection',
                                 files: selectedFiles,
+                                folders: selectedFolders,
                             });
                         }}
-                        onBulkMove={({ files: selectedFiles }) => {
-                            if (selectedFiles.length < 1) {
+                        onBulkMove={({
+                            files: selectedFiles,
+                            folders: selectedFolders,
+                        }) => {
+                            if (
+                                selectedFiles.length + selectedFolders.length <
+                                1
+                            ) {
                                 return;
                             }
 
                             setMoveTarget({
-                                kind: 'bulk-files',
+                                kind: 'bulk-selection',
                                 files: selectedFiles,
+                                folders: selectedFolders,
                             });
                         }}
                         onDeleteFolder={(folder) =>

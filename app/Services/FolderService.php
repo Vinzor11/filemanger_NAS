@@ -715,7 +715,8 @@ class FolderService
             }
 
             return [
-                'owner_user_id' => $parent->owner_user_id,
+                // Department-scoped folders do not support a user owner in schema.
+                'owner_user_id' => $parent->owner_user_id !== null ? $actor->id : null,
                 'department_id' => $parent->department_id,
                 'visibility' => $parent->visibility,
             ];

@@ -21,10 +21,10 @@ import {
 } from '@/components/ui/dialog';
 import { Spinner } from '@/components/ui/spinner';
 
-type ShareTarget =
+export type ShareTarget =
     | { kind: 'file'; file: FileRow }
     | { kind: 'folder'; folder: FolderRow }
-    | { kind: 'bulk-files'; files: FileRow[] };
+    | { kind: 'bulk-selection'; files: FileRow[]; folders: FolderRow[] };
 
 type ShareModalProps = {
     target: ShareTarget;
@@ -34,8 +34,8 @@ type ShareModalProps = {
 type AvailableEmployee = {
     id: number;
     public_id: string;
-    email: string;
-    name: string;
+    email: string | null;
+    name: string | null;
     department: {
         id: number;
         name: string;
@@ -81,10 +81,10 @@ function defaultPermissionsForTarget(): SharePermissions {
 }
 
 function displayEmployeeLabel(employee: AvailableEmployee): string {
-    const name = employee.name.trim();
-    const email = employee.email.trim();
+    const name = (employee.name ?? '').trim();
+    const email = (employee.email ?? '').trim();
 
-    return name !== '' ? name : email;
+    return name !== '' ? name : (email !== '' ? email : 'Unknown user');
 }
 
 function toInitials(value: string): string {
@@ -172,8 +172,11 @@ export function ShareModal({ target, onOpenChange }: ShareModalProps) {
     const employeePickerRef = useRef<HTMLDivElement | null>(null);
     const employeeInputRef = useRef<HTMLInputElement | null>(null);
     const permissionTargetKind: PermissionTargetKind =
-        target.kind === 'folder' ? 'folder' : 'file';
-    const supportsDepartmentShare = target.kind !== 'bulk-files';
+        target.kind === 'folder' ||
+        (target.kind === 'bulk-selection' && target.files.length === 0)
+            ? 'folder'
+            : 'file';
+    const supportsDepartmentShare = true;
     const [employeePermissions, setEmployeePermissions] =
         useState<SharePermissions>(() =>
             defaultPermissionsForTarget(),
@@ -191,13 +194,13 @@ export function ShareModal({ target, onOpenChange }: ShareModalProps) {
             ? target.file.public_id
             : target.kind === 'folder'
               ? target.folder.public_id
-              : (target.files[0]?.public_id ?? '');
+              : '';
     const targetLabel =
         target.kind === 'file'
             ? target.file.original_name
             : target.kind === 'folder'
               ? target.folder.name
-              : `${target.files.length} selected file(s)`;
+              : `${target.files.length + target.folders.length} selected item(s)`;
     const employeesEndpoint =
         target.kind === 'file'
             ? `/files/${targetPublicId}/share/available-employees`
@@ -213,7 +216,9 @@ export function ShareModal({ target, onOpenChange }: ShareModalProps) {
     const shareDepartmentEndpoint =
         target.kind === 'file'
             ? `/files/${targetPublicId}/share/department`
-            : `/folders/${targetPublicId}/share/department`;
+            : target.kind === 'folder'
+              ? `/folders/${targetPublicId}/share/department`
+              : '/selection/share/department';
     const isDepartmentVisibleByScope =
         target.kind === 'file'
             ? target.file.visibility === 'department'
@@ -398,10 +403,13 @@ export function ShareModal({ target, onOpenChange }: ShareModalProps) {
                 }));
 
                 await postShareRequest(shareUsersEndpoint, {
-                    ...(target.kind === 'bulk-files'
+                    ...(target.kind === 'bulk-selection'
                         ? {
                               files: target.files.map(
                                   (file) => file.public_id,
+                              ),
+                              folders: target.folders.map(
+                                  (folder) => folder.public_id,
                               ),
                           }
                         : {}),
@@ -412,10 +420,22 @@ export function ShareModal({ target, onOpenChange }: ShareModalProps) {
             if (supportsDepartmentShare && shareWithDepartment) {
                 await postShareRequest(
                     shareDepartmentEndpoint,
-                    permissionsPayloadForTarget(
-                        permissionTargetKind,
-                        departmentPermissions,
-                    ),
+                    {
+                        ...permissionsPayloadForTarget(
+                            permissionTargetKind,
+                            departmentPermissions,
+                        ),
+                        ...(target.kind === 'bulk-selection'
+                            ? {
+                                  files: target.files.map(
+                                      (file) => file.public_id,
+                                  ),
+                                  folders: target.folders.map(
+                                      (folder) => folder.public_id,
+                                  ),
+                              }
+                            : {}),
+                    },
                 );
             }
 
@@ -459,8 +479,8 @@ export function ShareModal({ target, onOpenChange }: ShareModalProps) {
             <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-3xl">
                 <DialogHeader>
                     <DialogTitle>
-                        {target.kind === 'bulk-files'
-                            ? 'Share files'
+                        {target.kind === 'bulk-selection'
+                            ? 'Share selected items'
                             : `Share ${target.kind === 'file' ? 'file' : 'folder'}`}
                     </DialogTitle>
                     <DialogDescription className="truncate">
@@ -693,7 +713,9 @@ export function ShareModal({ target, onOpenChange }: ShareModalProps) {
                                     <p className="text-xs text-muted-foreground">
                                         {target.kind === 'file'
                                             ? 'Include department users and define what they can do with this file.'
-                                            : 'Include department users and define what they can do in this folder.'}
+                                            : target.kind === 'folder'
+                                              ? 'Include department users and define what they can do in this folder.'
+                                              : 'Include department users and define what they can do with these selected items.'}
                                     </p>
                                 )}
                             </section>

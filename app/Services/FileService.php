@@ -113,7 +113,7 @@ class FileService
                         'checksum_sha256' => null,
                         'storage_disk' => $disk,
                         'visibility' => $folder->visibility,
-                        'owner_user_id' => $folder->owner_user_id ?: $actor->id,
+                        'owner_user_id' => $actor->id,
                         'department_id' => $folder->department_id,
                         'is_deleted' => false,
                         'deleted_at' => null,
@@ -140,7 +140,7 @@ class FileService
 
                 $file = File::query()->create([
                     'folder_id' => $folder->id,
-                    'owner_user_id' => $folder->owner_user_id ?: $actor->id,
+                    'owner_user_id' => $actor->id,
                     'department_id' => $folder->department_id,
                     'original_name' => $originalName,
                     'stored_name' => $storedName,

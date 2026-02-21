@@ -105,4 +105,51 @@ class FolderCrudTest extends TestCase
         $response->assertSessionHasErrors('destination_folder_id');
         $this->assertNull($root->fresh()->parent_id);
     }
+
+    public function test_create_subfolder_in_shared_folder_sets_owner_to_creator(): void
+    {
+        $department = $this->createDepartment();
+        $owner = $this->createUser($department);
+        $recipient = $this->createUser($department);
+
+        $this->grantPermissions($owner, ['share.manage', 'files.view']);
+        $this->grantPermissions($recipient, ['folders.create']);
+
+        $sharedParent = $this->createPrivateFolder($owner, [
+            'name' => 'Shared Parent',
+            'path' => 'Shared Parent',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($owner)->post(route('folders.share.users', $sharedParent->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $recipient->id,
+                    'can_view' => true,
+                    'can_upload' => true,
+                    'can_edit' => true,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $response = $this->actingAs($recipient)
+            ->from(route('folders.show', $sharedParent->public_id))
+            ->post(route('folders.store'), [
+                'parent_id' => $sharedParent->public_id,
+                'name' => 'Recipient Child',
+            ]);
+
+        $child = Folder::query()
+            ->where('parent_id', $sharedParent->id)
+            ->where('name', 'Recipient Child')
+            ->where('is_deleted', false)
+            ->firstOrFail();
+
+        $response->assertRedirect(route('folders.show', $child->public_id));
+        $this->assertSame($recipient->id, $child->owner_user_id);
+        $this->assertNull($child->department_id);
+        $this->assertSame('private', $child->visibility);
+    }
 }

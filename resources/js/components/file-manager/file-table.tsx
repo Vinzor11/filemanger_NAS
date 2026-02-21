@@ -48,6 +48,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { TableCardSkeleton } from '@/components/ui/page-loading-skeletons';
 import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover';
+import {
     Tooltip,
     TooltipContent,
     TooltipTrigger,
@@ -64,6 +69,12 @@ export type SharingRecipient = {
 export type SharingInfo = {
     is_shared?: boolean;
     shared_with?: SharingRecipient[];
+} | null;
+
+export type ItemSource = {
+    scope?: 'my_files' | 'shared_with_me' | 'department_files' | null;
+    label?: string | null;
+    detail?: string | null;
 } | null;
 
 export type FileRow = {
@@ -83,6 +94,7 @@ export type FileRow = {
         visibility?: 'private' | 'department' | 'shared';
     } | null;
     owner?: {
+        public_id?: string | null;
         email: string | null;
         name?: string | null;
         avatar?: string | null;
@@ -94,6 +106,7 @@ export type FileRow = {
         can_delete?: boolean;
     } | null;
     sharing?: SharingInfo;
+    source?: ItemSource;
 };
 
 export type FolderRow = {
@@ -106,6 +119,7 @@ export type FolderRow = {
     updated_at?: string | null;
     deleted_at?: string | null;
     owner?: {
+        public_id?: string | null;
         email: string | null;
         name?: string | null;
         avatar?: string | null;
@@ -117,12 +131,15 @@ export type FolderRow = {
         can_delete?: boolean;
     } | null;
     sharing?: SharingInfo;
+    source?: ItemSource;
 };
 
 type CurrentUser = {
+    public_id?: string | null;
     email?: string | null;
     name?: string | null;
     avatar?: string | null;
+    permissions?: string[] | null;
 } | null;
 
 type FileTableProps = {
@@ -310,8 +327,15 @@ function fileOriginalLocation(file: FileRow): string {
 
 function ownerMatchesCurrentUser(
     ownerEmail: string | null | undefined,
+    ownerPublicId: string | null | undefined,
     currentUser: CurrentUser,
 ): boolean {
+    const currentUserPublicId = (currentUser?.public_id ?? '').trim();
+    const normalizedOwnerPublicId = (ownerPublicId ?? '').trim();
+    if (normalizedOwnerPublicId !== '' && currentUserPublicId !== '') {
+        return normalizedOwnerPublicId === currentUserPublicId;
+    }
+
     if (!ownerEmail || !currentUser?.email) {
         return false;
     }
@@ -319,11 +343,24 @@ function ownerMatchesCurrentUser(
     return ownerEmail.toLowerCase() === currentUser.email.toLowerCase();
 }
 
+function ownerHintFromSource(source: ItemSource): string | null {
+    const detail = (source?.detail ?? '').trim();
+    const sharedByPrefix = 'Shared by ';
+    if (!detail.startsWith(sharedByPrefix)) {
+        return null;
+    }
+
+    const ownerHint = detail.slice(sharedByPrefix.length).trim();
+
+    return ownerHint !== '' ? ownerHint : null;
+}
+
 function ownerLabel(
     ownerEmail: string | null | undefined,
+    ownerPublicId: string | null | undefined,
     currentUser: CurrentUser,
 ): string {
-    if (ownerMatchesCurrentUser(ownerEmail, currentUser)) {
+    if (ownerMatchesCurrentUser(ownerEmail, ownerPublicId, currentUser)) {
         return 'me';
     }
 
@@ -347,23 +384,24 @@ function toInitials(value: string): string {
     return `${chunks[0][0]}${chunks[1][0]}`.toUpperCase();
 }
 
-function sharingRecipientLabel(recipient: SharingRecipient): string {
-    const identity = (recipient.name ?? recipient.email ?? '').trim();
+type ShareTarget = {
+    kind: 'file' | 'folder';
+    public_id: string;
+};
 
-    if (recipient.type === 'department') {
-        return identity ? `Department: ${identity}` : 'Department';
-    }
+type SharePermissionResponse = {
+    can_view?: boolean;
+    user?: {
+        public_id?: string | null;
+        name?: string | null;
+        email?: string | null;
+    } | null;
+};
 
-    return identity || 'Unknown user';
-}
-
-function sharedWithSummary(recipients: string[]): string {
-    if (recipients.length <= 2) {
-        return recipients.join(', ');
-    }
-
-    return `${recipients[0]}, ${recipients[1]}, +${recipients.length - 2} more`;
-}
+type SharedUser = {
+    public_id: string;
+    label: string;
+};
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) {
@@ -465,12 +503,14 @@ function fileIconNode(file: FileRow, iconClassName = 'size-5') {
 
 type OwnerCellProps = {
     ownerEmail?: string | null;
+    ownerPublicId?: string | null;
     currentUser?: CurrentUser;
     fallbackToCurrentUser?: boolean;
 };
 
 function OwnerCell({
     ownerEmail = null,
+    ownerPublicId = null,
     currentUser = null,
     fallbackToCurrentUser = false,
 }: OwnerCellProps) {
@@ -482,8 +522,12 @@ function OwnerCell({
         return <span className="text-muted-foreground">-</span>;
     }
 
-    const isCurrentUser = ownerMatchesCurrentUser(effectiveEmail, currentUser);
-    const label = ownerLabel(effectiveEmail, currentUser);
+    const isCurrentUser = ownerMatchesCurrentUser(
+        effectiveEmail,
+        ownerPublicId,
+        currentUser,
+    );
+    const label = ownerLabel(effectiveEmail, ownerPublicId, currentUser);
     const initialsSeed = isCurrentUser
         ? (currentUser?.name ?? currentUser?.email ?? effectiveEmail)
         : effectiveEmail;
@@ -503,30 +547,281 @@ function OwnerCell({
     );
 }
 
-function SharingMarker({ sharing }: { sharing?: SharingInfo }) {
-    if (!sharing?.is_shared) {
+function extractSharedUsers(
+    entries: SharePermissionResponse[] | undefined,
+    fallbackLabelsByPublicId: Map<string, string>,
+): SharedUser[] {
+    const uniqueUsers = new Map<string, SharedUser>();
+
+    for (const entry of entries ?? []) {
+        if (!entry?.can_view) {
+            continue;
+        }
+
+        const publicId = (entry.user?.public_id ?? '').trim();
+        if (publicId === '') {
+            continue;
+        }
+
+        const name = (entry.user?.name ?? '').trim();
+        const email = (entry.user?.email ?? '').trim();
+        const fallbackLabel = (fallbackLabelsByPublicId.get(publicId) ?? '').trim();
+        const label =
+            name !== ''
+                ? name
+                : email !== ''
+                  ? email
+                  : fallbackLabel !== ''
+                    ? fallbackLabel
+                    : 'Unknown user';
+        uniqueUsers.set(publicId, {
+            public_id: publicId,
+            label,
+        });
+    }
+
+    return Array.from(uniqueUsers.values());
+}
+
+function SharingMarker({
+    sharing,
+    target,
+}: {
+    sharing?: SharingInfo;
+    target: ShareTarget;
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+    const [usersLoadError, setUsersLoadError] = useState<string | null>(null);
+    const [isUsersLoaded, setIsUsersLoaded] = useState(false);
+    const [sharedUsers, setSharedUsers] = useState<SharedUser[]>([]);
+    const [revokingUserPublicId, setRevokingUserPublicId] = useState<
+        string | null
+    >(null);
+    const isShared = Boolean(sharing?.is_shared);
+    const fallbackLabelsByPublicId = useMemo(() => {
+        const labels = new Map<string, string>();
+        for (const recipient of sharing?.shared_with ?? []) {
+            if (recipient.type !== 'user') {
+                continue;
+            }
+
+            const publicId = (recipient.public_id ?? '').trim();
+            if (publicId === '') {
+                continue;
+            }
+
+            const label = (recipient.name ?? recipient.email ?? '').trim();
+            if (label !== '') {
+                labels.set(publicId, label);
+            }
+        }
+
+        return labels;
+    }, [sharing?.shared_with]);
+
+    const usersEndpoint =
+        target.kind === 'file'
+            ? `/files/${target.public_id}/share/users`
+            : `/folders/${target.public_id}/share/users`;
+
+    useEffect(() => {
+        setIsOpen(false);
+        setIsLoadingUsers(false);
+        setUsersLoadError(null);
+        setIsUsersLoaded(false);
+        setSharedUsers([]);
+        setRevokingUserPublicId(null);
+    }, [target.kind, target.public_id]);
+
+    useEffect(() => {
+        if (
+            !isShared ||
+            !isOpen ||
+            isUsersLoaded ||
+            usersLoadError !== null
+        ) {
+            return;
+        }
+
+        let isCancelled = false;
+        const abortController = new AbortController();
+        const requestTimeout = window.setTimeout(() => {
+            abortController.abort();
+        }, 10000);
+        const loadSharedUsers = async () => {
+            setIsLoadingUsers(true);
+            setUsersLoadError(null);
+
+            try {
+                const response = await fetch(usersEndpoint, {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                    signal: abortController.signal,
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to load shared users: ${response.status}`);
+                }
+
+                const payload = (await response.json()) as {
+                    data?: SharePermissionResponse[];
+                };
+
+                if (isCancelled) {
+                    return;
+                }
+
+                setSharedUsers(extractSharedUsers(payload.data, fallbackLabelsByPublicId));
+                setIsUsersLoaded(true);
+            } catch (error) {
+                if (isCancelled) {
+                    return;
+                }
+
+                if (
+                    error instanceof DOMException &&
+                    error.name === 'AbortError'
+                ) {
+                    setUsersLoadError('Unable to load shared users right now.');
+
+                    return;
+                }
+
+                setUsersLoadError('Unable to load shared users right now.');
+            } finally {
+                window.clearTimeout(requestTimeout);
+                if (!isCancelled) {
+                    setIsLoadingUsers(false);
+                }
+            }
+        };
+
+        void loadSharedUsers();
+
+        return () => {
+            isCancelled = true;
+            abortController.abort();
+            window.clearTimeout(requestTimeout);
+        };
+    }, [
+        isOpen,
+        isShared,
+        isUsersLoaded,
+        usersEndpoint,
+        usersLoadError,
+        fallbackLabelsByPublicId,
+    ]);
+
+    const revokeSharedUser = (userPublicId: string) => {
+        const revokeEndpoint =
+            target.kind === 'file'
+                ? `/files/${target.public_id}/share/users/${userPublicId}`
+                : `/folders/${target.public_id}/share/users/${userPublicId}`;
+
+        setRevokingUserPublicId(userPublicId);
+        setUsersLoadError(null);
+
+        router.delete(revokeEndpoint, {
+            preserveScroll: true,
+            preserveState: true,
+            onSuccess: () => {
+                setSharedUsers((current) =>
+                    current.filter((user) => user.public_id !== userPublicId),
+                );
+            },
+            onError: () => {
+                setUsersLoadError('Unable to revoke this share right now.');
+            },
+            onFinish: () => {
+                setRevokingUserPublicId(null);
+            },
+        });
+    };
+
+    if (!isShared) {
         return null;
     }
 
-    const recipients = (sharing.shared_with ?? [])
-        .map((recipient) => sharingRecipientLabel(recipient))
-        .filter(Boolean);
-    const detailLabel =
-        recipients.length > 0 ? `Shared with ${recipients.join(', ')}` : 'Shared';
-    const summaryLabel =
-        recipients.length > 0 ? `with ${sharedWithSummary(recipients)}` : '';
-
     return (
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="inline-flex shrink-0 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-                Shared
-            </span>
-            {summaryLabel ? (
-                <span className="truncate" title={detailLabel}>
-                    {summaryLabel}
-                </span>
-            ) : null}
-        </div>
+        <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+                <button
+                    type="button"
+                    className="mt-1 inline-flex shrink-0 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary transition-colors hover:border-primary/50 hover:bg-primary/15"
+                    data-no-row-select="true"
+                >
+                    Shared
+                </button>
+            </PopoverTrigger>
+            <PopoverContent
+                align="start"
+                className="w-80 space-y-2 p-3"
+                data-no-row-select="true"
+            >
+                <p className="text-sm font-medium">Shared users</p>
+                {isLoadingUsers ? (
+                    <p className="text-sm text-muted-foreground">
+                        Loading shared users...
+                    </p>
+                ) : null}
+                {!isLoadingUsers && usersLoadError ? (
+                    <div className="space-y-2">
+                        <p className="text-sm text-destructive">
+                            {usersLoadError}
+                        </p>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                                setUsersLoadError(null);
+                                setIsUsersLoaded(false);
+                            }}
+                            data-no-row-select="true"
+                        >
+                            Retry
+                        </Button>
+                    </div>
+                ) : null}
+                {!isLoadingUsers &&
+                !usersLoadError &&
+                sharedUsers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                        No active user shares.
+                    </p>
+                ) : null}
+                {!isLoadingUsers && !usersLoadError && sharedUsers.length > 0 ? (
+                    <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                        {sharedUsers.map((user) => (
+                            <div
+                                key={user.public_id}
+                                className="flex items-center justify-between gap-2 rounded-md border border-border/70 px-2 py-1.5"
+                            >
+                                <span className="truncate text-sm text-foreground">
+                                    {user.label}
+                                </span>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-7 text-muted-foreground hover:text-destructive"
+                                    onClick={() => revokeSharedUser(user.public_id)}
+                                    disabled={
+                                        revokingUserPublicId === user.public_id
+                                    }
+                                    aria-label={`Remove ${user.label}`}
+                                    data-no-row-select="true"
+                                >
+                                    <X className="size-3.5" />
+                                </Button>
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
+            </PopoverContent>
+        </Popover>
     );
 }
 
@@ -707,37 +1002,38 @@ export function FileTable({
     const selectionAllowsDelete =
         selectedFiles.every((file) => file.access?.can_delete !== false) &&
         selectedFolders.every((folder) => folder.access?.can_delete !== false);
-    const selectionAllowsDownload = selectedFiles.every(
-        (file) => file.access?.can_download !== false,
-    );
-    const selectionAllowsEdit = selectedFiles.every(
-        (file) => file.access?.can_edit !== false,
-    );
+    const selectionAllowsDownload =
+        selectedFiles.every((file) => file.access?.can_download !== false) &&
+        selectedFolders.every((folder) => folder.access?.can_view !== false);
+    const selectionAllowsEdit =
+        selectedFiles.every((file) => file.access?.can_edit !== false) &&
+        selectedFolders.every((folder) => folder.access?.can_edit !== false);
+    const hasActiveSelection =
+        selectedFiles.length > 0 || selectedFolders.length > 0;
     const canBulkTrash =
         !isTrashMode &&
         typeof onBulkTrash === 'function' &&
-        (selectedFiles.length > 0 || selectedFolders.length > 0) &&
+        hasActiveSelection &&
         selectionAllowsDelete;
     const canBulkPurge =
         isTrashMode &&
         typeof onBulkPurge === 'function' &&
-        (selectedFiles.length > 0 || selectedFolders.length > 0);
+        hasActiveSelection;
     const canBulkRestore =
         isTrashMode &&
         typeof onBulkRestore === 'function' &&
-        (selectedFiles.length > 0 || selectedFolders.length > 0);
-    const canBulkFileActions =
-        !isTrashMode && selectedFolders.length === 0 && selectedFiles.length > 0;
+        hasActiveSelection;
+    const canBulkSelectionActions = !isTrashMode && hasActiveSelection;
     const canBulkDownload =
-        canBulkFileActions &&
+        canBulkSelectionActions &&
         typeof onBulkDownload === 'function' &&
         selectionAllowsDownload;
     const canBulkShare =
-        canBulkFileActions &&
+        canBulkSelectionActions &&
         typeof onBulkShare === 'function' &&
         selectionAllowsEdit;
     const canBulkMove =
-        canBulkFileActions &&
+        canBulkSelectionActions &&
         typeof onBulkMove === 'function' &&
         selectionAllowsEdit;
     const dragSelectionRef = useRef<{
@@ -1071,6 +1367,104 @@ export function FileTable({
         setSelectedKeys([row.key]);
     };
 
+    const selectionToolbar = (
+        <>
+            <div className="inline-flex flex-wrap items-center gap-2 rounded-md border border-border/80 bg-background/95 px-2 py-1 text-xs text-muted-foreground shadow-soft-sm backdrop-blur">
+                <div className="inline-flex items-center gap-2">
+                    <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="size-6"
+                        onClick={() => {
+                            dragSelectionRef.current.active = false;
+                            setSelectedKeys([]);
+                            setSelectionActionError(null);
+                        }}
+                        aria-label="Clear selection"
+                    >
+                        <X className="size-3.5" />
+                    </Button>
+                    <span>{effectiveSelectedKeys.length} selected</span>
+                </div>
+                {canBulkRestore ? (
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={isSelectionActionProcessing}
+                        onClick={() => {
+                            void handleBulkRestore();
+                        }}
+                    >
+                        <RotateCcw className="size-4" />
+                        Restore selected
+                    </Button>
+                ) : null}
+                {canBulkTrash || canBulkPurge ? (
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        disabled={isSelectionActionProcessing}
+                        onClick={() => {
+                            void handleSelectionAction();
+                        }}
+                    >
+                        <Trash2 className="size-4" />
+                        {isTrashMode ? 'Delete forever' : 'Move to trash'}
+                    </Button>
+                ) : null}
+                {canBulkDownload ? (
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={isSelectionActionProcessing}
+                        onClick={() => {
+                            void handleBulkDownload();
+                        }}
+                    >
+                        <Download className="size-4" />
+                        Download
+                    </Button>
+                ) : null}
+                {canBulkShare ? (
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={isSelectionActionProcessing}
+                        onClick={() => {
+                            handleBulkShare();
+                        }}
+                    >
+                        <Share2 className="size-4" />
+                        Share
+                    </Button>
+                ) : null}
+                {canBulkMove ? (
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={isSelectionActionProcessing}
+                        onClick={() => {
+                            handleBulkMove();
+                        }}
+                    >
+                        <FolderInput className="size-4" />
+                        Move
+                    </Button>
+                ) : null}
+            </div>
+            {selectionActionError ? (
+                <p className="mt-1 rounded-md bg-background/95 px-2 py-1 text-xs text-warning shadow-soft-sm">
+                    {selectionActionError}
+                </p>
+            ) : null}
+        </>
+    );
     if (loading) {
         return <TableCardSkeleton columns={isTrashMode ? 6 : 5} rows={8} />;
     }
@@ -1087,102 +1481,7 @@ export function FileTable({
         <div className="relative overflow-hidden rounded-xl bg-transparent">
             {effectiveSelectedKeys.length ? (
                 <div className="pointer-events-none absolute top-2 right-3 left-3 z-20">
-                    <div className="pointer-events-auto inline-flex flex-wrap items-center gap-2 rounded-md border border-border/80 bg-background/95 px-2 py-1 text-xs text-muted-foreground shadow-soft-sm backdrop-blur">
-                        <div className="inline-flex items-center gap-2">
-                            <Button
-                                type="button"
-                                size="icon"
-                                variant="ghost"
-                                className="size-6"
-                                onClick={() => {
-                                    dragSelectionRef.current.active = false;
-                                    setSelectedKeys([]);
-                                    setSelectionActionError(null);
-                                }}
-                                aria-label="Clear selection"
-                            >
-                                <X className="size-3.5" />
-                            </Button>
-                            <span>{effectiveSelectedKeys.length} selected</span>
-                        </div>
-                        {canBulkRestore ? (
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                disabled={isSelectionActionProcessing}
-                                onClick={() => {
-                                    void handleBulkRestore();
-                                }}
-                            >
-                                <RotateCcw className="size-4" />
-                                Restore selected
-                            </Button>
-                        ) : null}
-                        {canBulkTrash || canBulkPurge ? (
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="destructive"
-                                disabled={isSelectionActionProcessing}
-                                onClick={() => {
-                                    void handleSelectionAction();
-                                }}
-                            >
-                                <Trash2 className="size-4" />
-                                {isTrashMode
-                                    ? 'Delete forever'
-                                    : 'Move to trash'}
-                            </Button>
-                        ) : null}
-                        {canBulkDownload ? (
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                disabled={isSelectionActionProcessing}
-                                onClick={() => {
-                                    void handleBulkDownload();
-                                }}
-                            >
-                                <Download className="size-4" />
-                                Download
-                            </Button>
-                        ) : null}
-                        {canBulkShare ? (
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                disabled={isSelectionActionProcessing}
-                                onClick={() => {
-                                    handleBulkShare();
-                                }}
-                            >
-                                <Share2 className="size-4" />
-                                Share
-                            </Button>
-                        ) : null}
-                        {canBulkMove ? (
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                disabled={isSelectionActionProcessing}
-                                onClick={() => {
-                                    handleBulkMove();
-                                }}
-                            >
-                                <FolderInput className="size-4" />
-                                Move
-                            </Button>
-                        ) : null}
-                    </div>
-                    {selectionActionError ? (
-                        <p className="pointer-events-auto mt-1 rounded-md bg-background/95 px-2 py-1 text-xs text-warning shadow-soft-sm">
-                            {selectionActionError}
-                        </p>
-                    ) : null}
+                    <div className="pointer-events-auto">{selectionToolbar}</div>
                 </div>
             ) : null}
             {layoutMode === 'context' ? (
@@ -1646,12 +1945,19 @@ export function FileTable({
                                                 showSharingMarker &&
                                                 ownerMatchesCurrentUser(
                                                     row.value.owner?.email,
+                                                    row.value.owner?.public_id,
                                                     currentUser,
                                                 ) ? (
                                                     <SharingMarker
                                                         sharing={
                                                             row.value.sharing
                                                         }
+                                                        target={{
+                                                            kind: 'folder',
+                                                            public_id:
+                                                                row.value
+                                                                    .public_id,
+                                                        }}
                                                     />
                                                 ) : null}
                                             </div>
@@ -1660,10 +1966,21 @@ export function FileTable({
                                     <td className="px-4 py-3.5 text-foreground">
                                         <OwnerCell
                                             ownerEmail={
-                                                row.value.owner?.email ?? null
+                                                row.value.owner?.email ??
+                                                ownerHintFromSource(
+                                                    row.value.source ?? null,
+                                                )
+                                            }
+                                            ownerPublicId={
+                                                row.value.owner?.public_id ??
+                                                null
                                             }
                                             currentUser={currentUser}
-                                            fallbackToCurrentUser={!isTrashMode}
+                                            fallbackToCurrentUser={
+                                                !isTrashMode &&
+                                                row.value.source?.scope ===
+                                                    'my_files'
+                                            }
                                         />
                                     </td>
                                     <td className="px-4 py-3.5 text-foreground">
@@ -1911,12 +2228,19 @@ export function FileTable({
                                                 showSharingMarker &&
                                                 ownerMatchesCurrentUser(
                                                     row.value.owner?.email,
+                                                    row.value.owner?.public_id,
                                                     currentUser,
                                                 ) ? (
                                                     <SharingMarker
                                                         sharing={
                                                             row.value.sharing
                                                         }
+                                                        target={{
+                                                            kind: 'file',
+                                                            public_id:
+                                                                row.value
+                                                                    .public_id,
+                                                        }}
                                                     />
                                                 ) : null}
                                             </div>
@@ -1925,9 +2249,21 @@ export function FileTable({
                                     <td className="px-4 py-3.5 text-foreground">
                                         <OwnerCell
                                             ownerEmail={
-                                                row.value.owner?.email ?? null
+                                                row.value.owner?.email ??
+                                                ownerHintFromSource(
+                                                    row.value.source ?? null,
+                                                )
+                                            }
+                                            ownerPublicId={
+                                                row.value.owner?.public_id ??
+                                                null
                                             }
                                             currentUser={currentUser}
+                                            fallbackToCurrentUser={
+                                                !isTrashMode &&
+                                                row.value.source?.scope ===
+                                                    'my_files'
+                                            }
                                         />
                                     </td>
                                     <td className="px-4 py-3.5 text-foreground">

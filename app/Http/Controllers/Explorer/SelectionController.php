@@ -12,6 +12,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class SelectionController extends Controller
@@ -54,30 +55,40 @@ class SelectionController extends Controller
 
     public function move(Request $request): RedirectResponse
     {
-        $validated = $request->validate([
-            'files' => ['required', 'array', 'min:1'],
+        $request->validate([
+            'files' => ['sometimes', 'array'],
             'files.*' => ['uuid', 'distinct', 'exists:files,public_id'],
+            'folders' => ['sometimes', 'array'],
+            'folders.*' => ['uuid', 'distinct', 'exists:folders,public_id'],
             'destination_folder_id' => ['required', 'uuid', 'exists:folders,public_id'],
             'silent' => ['sometimes', 'boolean'],
         ]);
 
-        $filePublicIds = collect($validated['files'])
-            ->map(static fn ($id): string => (string) $id)
-            ->values()
-            ->all();
-        $files = $this->resolveFilesByPublicIds($filePublicIds);
+        [$files, $folders] = $this->resolveSelection($request);
+        $this->ensureSelectionNotEmpty($files, $folders);
+        $foldersToMove = $this->rootSelectionFolders($folders);
+        $selectedFolderIdLookup = $this->collectSubtreeFolderIdLookup($foldersToMove);
+        $filesToMove = $this->excludeFilesInFolderLookup($files, $selectedFolderIdLookup);
 
         $destination = Folder::query()
-            ->where('public_id', $validated['destination_folder_id'])
+            ->where('public_id', (string) $request->input('destination_folder_id'))
             ->firstOrFail();
 
         $this->authorize('upload', $destination);
 
-        foreach ($files as $file) {
+        foreach ($foldersToMove as $folder) {
+            $this->authorize('update', $folder);
+        }
+
+        foreach ($filesToMove as $file) {
             $this->authorize('update', $file);
         }
 
-        foreach ($files as $file) {
+        foreach ($foldersToMove as $folder) {
+            $this->folderService->move($request->user(), $folder, $destination, $request);
+        }
+
+        foreach ($filesToMove as $file) {
             $this->fileService->move($request->user(), $file, $destination, $request);
         }
 
@@ -85,27 +96,43 @@ class SelectionController extends Controller
             return back();
         }
 
-        return back()->with('status', "{$files->count()} file(s) moved.");
+        $total = $filesToMove->count() + $foldersToMove->count();
+
+        return back()->with('status', "{$total} item(s) moved.");
     }
 
     public function download(Request $request): BinaryFileResponse
     {
-        $validated = $request->validate([
-            'files' => ['required', 'array', 'min:1'],
+        $request->validate([
+            'files' => ['sometimes', 'array'],
             'files.*' => ['uuid', 'distinct', 'exists:files,public_id'],
+            'folders' => ['sometimes', 'array'],
+            'folders.*' => ['uuid', 'distinct', 'exists:folders,public_id'],
         ]);
 
-        $filePublicIds = collect($validated['files'])
-            ->map(static fn ($id): string => (string) $id)
-            ->values()
-            ->all();
-        $files = $this->resolveFilesByPublicIds($filePublicIds);
+        [$files, $folders] = $this->resolveSelection($request);
+        $this->ensureSelectionNotEmpty($files, $folders);
+        $foldersToDownload = $this->rootSelectionFolders($folders);
+        $selectedFolderIdLookup = $this->collectSubtreeFolderIdLookup($foldersToDownload);
 
-        foreach ($files as $file) {
+        $filesInSelectedFolders = collect();
+        if ($selectedFolderIdLookup !== []) {
+            $filesInSelectedFolders = File::query()
+                ->whereIn('folder_id', array_keys($selectedFolderIdLookup))
+                ->where('is_deleted', false)
+                ->get();
+        }
+
+        $downloadFiles = $files
+            ->concat($filesInSelectedFolders)
+            ->unique('id')
+            ->values();
+
+        foreach ($downloadFiles as $file) {
             $this->authorize('download', $file);
         }
 
-        return $this->fileService->downloadAsArchive($request->user(), $files, $request);
+        return $this->fileService->downloadAsArchive($request->user(), $downloadFiles, $request);
     }
 
     public function availableEmployees(Request $request): JsonResponse
@@ -122,31 +149,47 @@ class SelectionController extends Controller
     public function shareUsers(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'files' => ['required', 'array', 'min:1'],
+            'files' => ['sometimes', 'array'],
             'files.*' => ['uuid', 'distinct', 'exists:files,public_id'],
+            'folders' => ['sometimes', 'array'],
+            'folders.*' => ['uuid', 'distinct', 'exists:folders,public_id'],
             'shares' => ['required', 'array', 'min:1'],
             'shares.*.user_id' => ['required', 'integer', 'exists:users,id'],
             'shares.*.can_view' => ['sometimes', 'boolean'],
             'shares.*.can_download' => ['sometimes', 'boolean'],
+            'shares.*.can_upload' => ['sometimes', 'boolean'],
             'shares.*.can_edit' => ['sometimes', 'boolean'],
             'shares.*.can_delete' => ['sometimes', 'boolean'],
             'silent' => ['sometimes', 'boolean'],
         ]);
 
-        $filePublicIds = collect($validated['files'])
-            ->map(static fn ($id): string => (string) $id)
-            ->values()
-            ->all();
-        $files = $this->resolveFilesByPublicIds($filePublicIds);
+        [$files, $folders] = $this->resolveSelection($request);
+        $this->ensureSelectionNotEmpty($files, $folders);
+        $foldersToShare = $this->rootSelectionFolders($folders);
+        $selectedFolderIdLookup = $this->collectSubtreeFolderIdLookup($foldersToShare);
+        $filesToShare = $this->excludeFilesInFolderLookup($files, $selectedFolderIdLookup);
 
-        foreach ($files as $file) {
+        foreach ($foldersToShare as $folder) {
+            $this->authorize('share', $folder);
+        }
+
+        foreach ($filesToShare as $file) {
             $this->authorize('share', $file);
         }
 
-        foreach ($files as $file) {
+        foreach ($filesToShare as $file) {
             $this->sharingService->upsertUserShares(
                 actor: $request->user(),
                 file: $file,
+                shares: $validated['shares'],
+                request: $request,
+            );
+        }
+
+        foreach ($foldersToShare as $folder) {
+            $this->sharingService->upsertFolderShares(
+                actor: $request->user(),
+                folder: $folder,
                 shares: $validated['shares'],
                 request: $request,
             );
@@ -156,7 +199,69 @@ class SelectionController extends Controller
             return back();
         }
 
-        return back()->with('status', "Sharing updated for {$files->count()} file(s).");
+        $total = $filesToShare->count() + $foldersToShare->count();
+
+        return back()->with('status', "Sharing updated for {$total} item(s).");
+    }
+
+    public function shareDepartment(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'files' => ['sometimes', 'array'],
+            'files.*' => ['uuid', 'distinct', 'exists:files,public_id'],
+            'folders' => ['sometimes', 'array'],
+            'folders.*' => ['uuid', 'distinct', 'exists:folders,public_id'],
+            'can_view' => ['sometimes', 'boolean'],
+            'can_download' => ['sometimes', 'boolean'],
+            'can_upload' => ['sometimes', 'boolean'],
+            'can_edit' => ['sometimes', 'boolean'],
+            'can_delete' => ['sometimes', 'boolean'],
+            'silent' => ['sometimes', 'boolean'],
+        ]);
+
+        [$files, $folders] = $this->resolveSelection($request);
+        $this->ensureSelectionNotEmpty($files, $folders);
+        $foldersToShare = $this->rootSelectionFolders($folders);
+        $selectedFolderIdLookup = $this->collectSubtreeFolderIdLookup($foldersToShare);
+        $filesToShare = $this->excludeFilesInFolderLookup($files, $selectedFolderIdLookup);
+
+        foreach ($foldersToShare as $folder) {
+            $this->authorize('share', $folder);
+        }
+
+        foreach ($filesToShare as $file) {
+            $this->authorize('share', $file);
+        }
+
+        $permissions = collect($validated)
+            ->only(['can_view', 'can_download', 'can_upload', 'can_edit', 'can_delete'])
+            ->all();
+
+        foreach ($filesToShare as $file) {
+            $this->sharingService->shareToDepartment(
+                actor: $request->user(),
+                file: $file,
+                permissions: $permissions,
+                request: $request,
+            );
+        }
+
+        foreach ($foldersToShare as $folder) {
+            $this->sharingService->shareFolderToDepartment(
+                actor: $request->user(),
+                folder: $folder,
+                permissions: $permissions,
+                request: $request,
+            );
+        }
+
+        if ($request->boolean('silent')) {
+            return back();
+        }
+
+        $total = $filesToShare->count() + $foldersToShare->count();
+
+        return back()->with('status', "Department sharing updated for {$total} item(s).");
     }
 
     public function restore(Request $request): RedirectResponse
@@ -269,5 +374,126 @@ class SelectionController extends Controller
             ->values();
 
         return [$files, $folders];
+    }
+
+    private function ensureSelectionNotEmpty(Collection $files, Collection $folders): void
+    {
+        if ($files->isNotEmpty() || $folders->isNotEmpty()) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'selection' => 'Select at least one file or folder.',
+        ]);
+    }
+
+    /**
+     * @param  Collection<int, Folder>  $folders
+     * @return Collection<int, Folder>
+     */
+    private function rootSelectionFolders(Collection $folders): Collection
+    {
+        if ($folders->isEmpty()) {
+            return $folders;
+        }
+
+        $sorted = $folders
+            ->sortBy(
+                static fn (Folder $folder): int => strlen(trim((string) $folder->path, '/')),
+            )
+            ->values();
+
+        $rootFolders = collect();
+        $rootPaths = [];
+
+        foreach ($sorted as $folder) {
+            $path = trim((string) $folder->path, '/');
+            if ($path === '') {
+                $rootFolders->push($folder);
+                continue;
+            }
+
+            $isNestedSelection = false;
+            foreach ($rootPaths as $rootPath) {
+                if ($path === $rootPath || str_starts_with($path, "{$rootPath}/")) {
+                    $isNestedSelection = true;
+                    break;
+                }
+            }
+
+            if ($isNestedSelection) {
+                continue;
+            }
+
+            $rootFolders->push($folder);
+            $rootPaths[] = $path;
+        }
+
+        return $rootFolders->values();
+    }
+
+    /**
+     * @param  Collection<int, Folder>  $folders
+     * @return array<int, bool>
+     */
+    private function collectSubtreeFolderIdLookup(Collection $folders): array
+    {
+        $rootIds = $folders
+            ->pluck('id')
+            ->map(static fn ($id): int => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($rootIds === []) {
+            return [];
+        }
+
+        $lookup = array_fill_keys($rootIds, true);
+        $cursor = $rootIds;
+
+        while ($cursor !== []) {
+            $next = Folder::query()
+                ->whereIn('parent_id', $cursor)
+                ->where('is_deleted', false)
+                ->pluck('id')
+                ->map(static fn ($id): int => (int) $id)
+                ->all();
+
+            $next = array_values(array_filter(
+                $next,
+                static fn (int $id): bool => ! isset($lookup[$id]),
+            ));
+
+            if ($next === []) {
+                break;
+            }
+
+            foreach ($next as $id) {
+                $lookup[$id] = true;
+            }
+
+            $cursor = $next;
+        }
+
+        return $lookup;
+    }
+
+    /**
+     * @param  Collection<int, File>  $files
+     * @param  array<int, bool>  $folderIdLookup
+     * @return Collection<int, File>
+     */
+    private function excludeFilesInFolderLookup(Collection $files, array $folderIdLookup): Collection
+    {
+        if ($files->isEmpty() || $folderIdLookup === []) {
+            return $files->values();
+        }
+
+        return $files
+            ->filter(
+                static fn (File $file): bool => ! isset($folderIdLookup[(int) $file->folder_id]),
+            )
+            ->values();
     }
 }

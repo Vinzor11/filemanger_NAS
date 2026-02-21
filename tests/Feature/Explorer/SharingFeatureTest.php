@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Explorer;
 
+use App\Models\Folder;
 use App\Services\ExplorerService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Concerns\BuildsDomainData;
@@ -11,6 +12,34 @@ class SharingFeatureTest extends TestCase
 {
     use BuildsDomainData;
     use RefreshDatabase;
+
+    public function test_owner_has_full_access_to_owned_files_and_folders_without_role_permissions(): void
+    {
+        $owner = $this->createUser();
+        $folder = $this->createPrivateFolder($owner, [
+            'name' => 'Owner Root',
+            'path' => 'Owner Root',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+        $file = $this->createFile($folder, $owner, [
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->assertTrue($owner->can('view', $folder));
+        $this->assertTrue($owner->can('upload', $folder));
+        $this->assertTrue($owner->can('update', $folder));
+        $this->assertTrue($owner->can('delete', $folder));
+        $this->assertTrue($owner->can('share', $folder));
+        $this->assertTrue($owner->can('create', [Folder::class, $folder]));
+
+        $this->assertTrue($owner->can('view', $file));
+        $this->assertTrue($owner->can('download', $file));
+        $this->assertTrue($owner->can('update', $file));
+        $this->assertTrue($owner->can('delete', $file));
+        $this->assertTrue($owner->can('share', $file));
+    }
 
     public function test_available_employees_endpoint_returns_active_employees_and_excludes_actor(): void
     {
@@ -115,6 +144,47 @@ class SharingFeatureTest extends TestCase
             'user_id' => $target->id,
             'can_view' => true,
             'can_download' => true,
+        ]);
+    }
+
+    public function test_owner_can_share_file_without_share_manage_permission(): void
+    {
+        $department = $this->createDepartment();
+        $owner = $this->createUser($department);
+        $recipient = $this->createUser($department);
+
+        $folder = $this->createPrivateFolder($owner, [
+            'name' => 'Owner Share Root',
+            'path' => 'Owner Share Root',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+        $file = $this->createFile($folder, $owner, [
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->assertTrue($owner->can('share', $file));
+
+        $response = $this->actingAs($owner)
+            ->from(route('explorer.my'))
+            ->post(route('files.share.users', $file->public_id), [
+                'shares' => [
+                    [
+                        'user_id' => $recipient->id,
+                        'can_view' => true,
+                        'can_download' => false,
+                        'can_edit' => false,
+                        'can_delete' => false,
+                    ],
+                ],
+            ]);
+
+        $response->assertRedirect(route('explorer.my'));
+        $this->assertDatabaseHas('file_permissions', [
+            'file_id' => $file->id,
+            'user_id' => $recipient->id,
+            'can_view' => true,
         ]);
     }
 
@@ -411,6 +481,69 @@ class SharingFeatureTest extends TestCase
         $this->assertFalse((bool) data_get($directRow, 'access.can_delete'));
     }
 
+    public function test_my_files_includes_direct_and_department_shared_files_with_source_metadata(): void
+    {
+        $department = $this->createDepartment();
+        $owner = $this->createUser($department);
+        $viewer = $this->createUser($department);
+        $this->grantPermissions($owner, ['share.manage', 'files.view']);
+        $this->grantPermissions($viewer, ['files.view']);
+
+        $directShareFolder = $this->createPrivateFolder($owner, [
+            'name' => 'Direct Share Source',
+            'path' => 'Direct Share Source',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+        $directlySharedFile = $this->createFile($directShareFolder, $owner, [
+            'original_name' => 'directly-shared.txt',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $departmentShareFolder = $this->createPrivateFolder($owner, [
+            'name' => 'Department Share Source',
+            'path' => 'Department Share Source',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+        $departmentSharedFile = $this->createFile($departmentShareFolder, $owner, [
+            'original_name' => 'department-shared.txt',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($owner)->post(route('files.share.users', $directlySharedFile->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $viewer->id,
+                    'can_view' => true,
+                    'can_download' => true,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $this->actingAs($owner)->post(route('files.share.department', $departmentSharedFile->public_id), [
+            'can_view' => true,
+            'can_download' => false,
+            'can_edit' => false,
+            'can_delete' => false,
+        ])->assertRedirect();
+
+        $payload = app(ExplorerService::class)->myFiles($viewer, ['per_page' => 20]);
+        $directRow = collect($payload['files']->items())->firstWhere('id', $directlySharedFile->id);
+        $departmentRow = collect($payload['files']->items())->firstWhere('id', $departmentSharedFile->id);
+
+        $this->assertNotNull($directRow);
+        $this->assertNotNull($departmentRow);
+        $this->assertSame('Shared With Me', data_get($directRow, 'source.label'));
+        $this->assertSame('Shared by '.$owner->email, data_get($directRow, 'source.detail'));
+        $this->assertSame('Department Files', data_get($departmentRow, 'source.label'));
+        $this->assertStringStartsWith('Shared with', (string) data_get($departmentRow, 'source.detail'));
+    }
+
     public function test_file_can_be_shared_to_actors_department_for_my_files(): void
     {
         $department = $this->createDepartment();
@@ -610,5 +743,151 @@ class SharingFeatureTest extends TestCase
         $this->assertFalse((bool) data_get($directFileRow, 'access.can_download'));
         $this->assertTrue((bool) data_get($directFileRow, 'access.can_edit'));
         $this->assertFalse((bool) data_get($directFileRow, 'access.can_delete'));
+    }
+
+    public function test_department_files_exclude_items_shared_directly_with_an_employee(): void
+    {
+        $department = $this->createDepartment();
+        $actor = $this->createUser($department);
+        $peer = $this->createUser($department);
+        $this->grantPermissions($actor, ['share.manage', 'files.view']);
+        $this->grantPermissions($peer, ['files.view']);
+
+        $sourceFolder = $this->createPrivateFolder($actor, [
+            'name' => 'Employee Share Source',
+            'path' => 'Employee Share Source',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+        $sharedFile = $this->createFile($sourceFolder, $actor, [
+            'original_name' => 'employee-direct-share.txt',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($actor)->post(route('files.share.users', $sharedFile->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $peer->id,
+                    'can_view' => true,
+                    'can_download' => false,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $departmentPayload = app(ExplorerService::class)->departmentFiles($peer, ['per_page' => 20]);
+        $departmentFileRow = collect($departmentPayload['files']->items())->firstWhere('id', $sharedFile->id);
+        $this->assertNull($departmentFileRow);
+
+        $sharedPayload = app(ExplorerService::class)->sharedWithMe($peer, ['per_page' => 20]);
+        $sharedFileRow = collect($sharedPayload['files']->items())->firstWhere('id', $sharedFile->id);
+        $this->assertNotNull($sharedFileRow);
+    }
+
+    public function test_folder_user_shares_can_be_listed_and_revoked(): void
+    {
+        $department = $this->createDepartment();
+        $owner = $this->createUser($department);
+        $recipient = $this->createUser($department);
+        $this->grantPermissions($owner, ['share.manage', 'files.view']);
+
+        $folder = $this->createPrivateFolder($owner, [
+            'name' => 'Popover Share Target',
+            'path' => 'Popover Share Target',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($owner)->post(route('folders.share.users', $folder->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $recipient->id,
+                    'can_view' => true,
+                    'can_upload' => false,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $list = $this->actingAs($owner)
+            ->getJson(route('folders.share.users.index', $folder->public_id));
+
+        $list->assertOk()
+            ->assertJsonPath('data.0.user.public_id', $recipient->public_id);
+
+        $revoke = $this->actingAs($owner)
+            ->delete(route('folders.share.users.revoke', [
+                'folder' => $folder->public_id,
+                'targetUser' => $recipient->public_id,
+            ]));
+
+        $revoke->assertRedirect();
+        $this->assertDatabaseMissing('folder_permissions', [
+            'folder_id' => $folder->id,
+            'user_id' => $recipient->id,
+        ]);
+    }
+
+    public function test_shared_with_me_payload_includes_owner_information_for_shared_items(): void
+    {
+        $department = $this->createDepartment();
+        $owner = $this->createUser($department);
+        $recipient = $this->createUser($department);
+        $this->grantPermissions($owner, ['share.manage', 'files.view']);
+        $this->grantPermissions($recipient, ['files.view']);
+
+        $folder = $this->createPrivateFolder($owner, [
+            'name' => 'Owner Payload Folder',
+            'path' => 'Owner Payload Folder',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+        $directFileFolder = $this->createPrivateFolder($owner, [
+            'name' => 'Owner Payload Direct File Folder',
+            'path' => 'Owner Payload Direct File Folder',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+        $file = $this->createFile($directFileFolder, $owner, [
+            'original_name' => 'owner-payload.txt',
+            'visibility' => 'private',
+            'department_id' => null,
+        ]);
+
+        $this->actingAs($owner)->post(route('folders.share.users', $folder->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $recipient->id,
+                    'can_view' => true,
+                    'can_upload' => false,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $this->actingAs($owner)->post(route('files.share.users', $file->public_id), [
+            'shares' => [
+                [
+                    'user_id' => $recipient->id,
+                    'can_view' => true,
+                    'can_download' => false,
+                    'can_edit' => false,
+                    'can_delete' => false,
+                ],
+            ],
+        ])->assertRedirect();
+
+        $payload = app(ExplorerService::class)->sharedWithMe($recipient, ['per_page' => 20]);
+        $folderRow = $payload['folders']->firstWhere('id', $folder->id);
+        $fileRow = collect($payload['files']->items())->firstWhere('id', $file->id);
+
+        $this->assertNotNull($folderRow);
+        $this->assertNotNull($fileRow);
+        $this->assertSame($owner->email, data_get($folderRow, 'owner.email'));
+        $this->assertSame($owner->email, data_get($fileRow, 'owner.email'));
     }
 }

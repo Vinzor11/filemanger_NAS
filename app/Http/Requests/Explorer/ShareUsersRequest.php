@@ -11,7 +11,7 @@ class ShareUsersRequest extends FormRequest
      */
     public function authorize(): bool
     {
-        return $this->user()?->can('share.manage') === true;
+        return true;
     }
 
     /**
@@ -31,4 +31,3 @@ class ShareUsersRequest extends FormRequest
         ];
     }
 }
-
